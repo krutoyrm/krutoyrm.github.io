@@ -2,18 +2,34 @@
     'use strict';
 
     const TMDB = Lampa.TMDB;
-    const Network = Lampa.Network;
 
     const FILTER_DEFAULTS = {
-        type: 'all',          // all | tv | movie
+        type: 'all',
         year_from: '',
         year_to: '',
         rating: '',
-        sort: 'created_at.desc', // popularity.desc, vote_average.desc, first_air_date.desc, vote_count.desc, created_at.desc
-        status: ''            // returning, ended, planned, etc. (оставим как строку)
+        sort: 'popularity.desc',
+        status: ''
     };
 
     let currentFilter = Object.assign({}, FILTER_DEFAULTS);
+    let currentCategory = null;
+
+    const GENRES = [
+        { title: "Все жанры", id: "" },
+        { title: "Экшен", id: "28" },
+        { title: "Приключения", id: "12" },
+        { title: "Комедия", id: "35" },
+        { title: "Драма", id: "18" },
+        { title: "Фэнтези", id: "14" },
+        { title: "Научная фантастика", id: "878" },
+        { title: "Детектив", id: "9648" },
+        { title: "Романтика", id: "10749" },
+        { title: "Анимация", id: "16" },
+        { title: "Ужасы", id: "27" },
+        { title: "Триллер", id: "53" },
+        { title: "Криминал", id: "80" }
+    ];
 
     function createMenuItem() {
         const icon = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><path fill="currentColor" fill-rule="evenodd" d="m368.256 214.573l-102.627 187.35c40.554 71.844 73.647 97.07 138.664 94.503c63.67-2.514 136.974-89.127 95.694-163.243L397.205 150.94c-3.676 12.266-25.16 55.748-28.95 63.634M216.393 440.625C104.077 583.676-57.957 425.793 20.85 302.892c0 0 83.895-147.024 116.521-204.303c25.3-44.418 53.644-72.37 90.497-81.33c44.94-10.926 97.565 12.834 125.62 56.167c19.497 30.113 36.752 57.676 6.343 109.738c-3.613 6.184-136.326 248.402-143.438 257.46m8.014-264.595c-30.696-17.696-30.696-62.177 0-79.873s69.273 4.544 69.273 39.936s-38.578 57.633-69.273 39.937" clip-rule="evenodd"/></svg>`;
@@ -26,31 +42,29 @@
         `);
 
         item.on('hover:enter', () => {
-            openAnimeRoot();
+            openAnimeCatalog();
         });
 
         $('.menu .menu__list').eq(0).append(item);
     }
 
-    function openAnimeRoot() {
-        const genres = [
-            { title: "Экшен", tmdb: "28" },
-            { title: "Приключения", tmdb: "12" },
-            { title: "Комедия", tmdb: "35" },
-            { title: "Драма", tmdb: "18" },
-            { title: "Фэнтези", tmdb: "14" },
-            { title: "Научная фантастика", tmdb: "878" },
-            { title: "Детектив", tmdb: "9648" },
-            { title: "Романтика", tmdb: "10749" },
-            { title: "Анимация", tmdb: "16" }
-        ];
+    function openAnimeCatalog() {
+        Lampa.Activity.push({
+            url: '',
+            title: 'Аниме RMK',
+            component: 'anime_rmk_catalog',
+            category: { id: 'popular', title: 'Популярное' },
+            filter: Object.assign({}, currentFilter),
+            page: 1
+        });
+    }
 
+    function openRootMenu() {
         const categories = [
             { title: "Популярное", id: "popular" },
             { title: "Топ‑100", id: "top100" },
             { title: "Жанры", id: "genres" },
-            { title: "Рекомендации TMDB", id: "trending" },
-            { title: "Подборки", id: "collections" }
+            { title: "Рекомендации TMDB", id: "trending" }
         ];
 
         Lampa.Select.show({
@@ -58,9 +72,17 @@
             items: categories,
             onSelect: (item) => {
                 if (item.id === 'genres') {
-                    showGenres(genres);
+                    showGenres();
                 } else {
-                    openCatalogActivity(item);
+                    currentCategory = item;
+                    Lampa.Activity.push({
+                        url: '',
+                        title: item.title,
+                        component: 'anime_rmk_catalog',
+                        category: item,
+                        filter: Object.assign({}, currentFilter),
+                        page: 1
+                    });
                 }
             },
             onBack: () => {
@@ -69,37 +91,32 @@
         });
     }
 
-    function showGenres(genres) {
+    function showGenres() {
         Lampa.Select.show({
             title: 'Жанры',
-            items: genres,
+            items: GENRES.filter(g => g.id),
             onSelect: (g) => {
-                openCatalogActivity({ id: 'genre', genre: g });
+                currentCategory = { id: 'genre', title: g.title, genre: g };
+                Lampa.Activity.push({
+                    url: '',
+                    title: g.title,
+                    component: 'anime_rmk_catalog',
+                    category: currentCategory,
+                    filter: Object.assign({}, currentFilter, { genre: g.id }),
+                    page: 1
+                });
             },
-            onBack: () => {
-                openAnimeRoot();
-            }
+            onBack: openRootMenu
         });
     }
 
-    function openCatalogActivity(category) {
-        Lampa.Activity.push({
-            url: '',
-            title: category.title || 'Аниме RMK',
-            component: 'anime_rmk_catalog',
-            category: category,
-            filter: Object.assign({}, currentFilter),
-            page: 1
-        });
-    }
-
-    // Регистрация компонента каталога
     Lampa.Component.add('anime_rmk_catalog', function () {
         let comp = this;
         let activity = Lampa.Activity.current();
-        let category = activity.category || {};
+        let category = activity.category || { id: 'popular', title: 'Аниме RMK' };
         let filter = activity.filter || Object.assign({}, FILTER_DEFAULTS);
         currentFilter = Object.assign({}, filter);
+        currentCategory = category;
 
         let body = $('<div class="category category_full"></div>');
         let scroll = new Lampa.Scroll({ mask: true });
@@ -112,14 +129,11 @@
 
         comp.create = function () {
             comp.activity.loader(true);
-
             buildHeader();
-
             loadPage(1, () => {
                 comp.activity.loader(false);
                 comp.activity.toggle();
             });
-
             return body;
         };
 
@@ -132,7 +146,7 @@
             let filter_btn = $('<div class="category__head-button selector">Фильтр</div>');
 
             home_btn.on('hover:enter', () => {
-                openAnimeRoot();
+                openRootMenu();
             });
 
             filter_btn.on('hover:enter', () => {
@@ -150,6 +164,11 @@
                     title: 'Тип',
                     subtitle: filterTypeTitle(currentFilter.type),
                     id: 'type'
+                },
+                {
+                    title: 'Жанр',
+                    subtitle: getGenreTitle(currentFilter.genre),
+                    id: 'genre'
                 },
                 {
                     title: 'Год от',
@@ -177,7 +196,7 @@
                     id: 'status'
                 },
                 {
-                    title: 'Показать результаты',
+                    title: 'Применить',
                     id: 'apply'
                 }
             ];
@@ -187,6 +206,7 @@
                 items: items,
                 onSelect: (it) => {
                     if (it.id === 'type') selectType();
+                    else if (it.id === 'genre') selectGenre();
                     else if (it.id === 'year_from') selectYearFrom();
                     else if (it.id === 'year_to') selectYearTo();
                     else if (it.id === 'rating') selectRating();
@@ -206,13 +226,19 @@
             return 'Все';
         }
 
+        function getGenreTitle(genreId) {
+            if (!genreId) return 'Любой';
+            let genre = GENRES.find(g => g.id === genreId);
+            return genre ? genre.title : 'Любой';
+        }
+
         function sortTitle(sort) {
             switch (sort) {
                 case 'popularity.desc': return 'Популярность';
                 case 'vote_average.desc': return 'Рейтинг';
                 case 'first_air_date.desc': return 'Дата выхода';
                 case 'vote_count.desc': return 'Количество голосов';
-                case 'created_at.desc': return 'Дата добавления (новые)';
+                case 'created_at.desc': return 'Дата добавления';
                 default: return 'Популярность';
             }
         }
@@ -234,6 +260,18 @@
             });
         }
 
+        function selectGenre() {
+            Lampa.Select.show({
+                title: 'Жанр',
+                items: GENRES,
+                onSelect: (it) => {
+                    currentFilter.genre = it.id;
+                    openFilterScreen();
+                },
+                onBack: openFilterScreen
+            });
+        }
+
         function selectYearFrom() {
             let years = [];
             let now = new Date().getFullYear();
@@ -247,10 +285,12 @@
                 items: years,
                 onSelect: (it) => {
                     currentFilter.year_from = it.year;
-                    if (it.year && (!currentFilter.year_to || Number(currentFilter.year_to) < Number(it.year))) {
+                    if (it.year) {
                         currentFilter.year_to = it.year;
+                        selectYearTo();
+                        return;
                     }
-                    selectYearTo();
+                    openFilterScreen();
                 },
                 onBack: openFilterScreen
             });
@@ -302,7 +342,7 @@
                 { title: 'Рейтинг', value: 'vote_average.desc' },
                 { title: 'Дата выхода', value: 'first_air_date.desc' },
                 { title: 'Количество голосов', value: 'vote_count.desc' },
-                { title: 'Дата добавления (новые)', value: 'created_at.desc' }
+                { title: 'Дата добавления', value: 'created_at.desc' }
             ];
             Lampa.Select.show({
                 title: 'Сортировка',
@@ -335,6 +375,7 @@
 
         function applyFilter() {
             activity.filter = Object.assign({}, currentFilter);
+            activity.category = currentCategory;
             comp.activity.loader(true);
             scroll.clear();
             last_page = 1;
@@ -346,11 +387,8 @@
         }
 
         function buildBaseUrl(page) {
-            let params = [];
             let lang = 'ja';
-
             let sort = currentFilter.sort || 'popularity.desc';
-
             let base_tv = 'discover/tv';
             let base_movie = 'discover/movie';
 
@@ -359,6 +397,10 @@
                 p.push('with_original_language=' + lang);
                 p.push('page=' + page);
                 p.push('sort_by=' + encodeURIComponent(sort));
+
+                if (currentFilter.genre) {
+                    p.push('with_genres=' + currentFilter.genre);
+                }
 
                 if (currentFilter.year_from) {
                     if (base === 'discover/tv') {
@@ -409,7 +451,6 @@
             loading = true;
 
             let urls = buildBaseUrl(page);
-
             let promises = [];
 
             if (urls.tv) {
@@ -433,12 +474,13 @@
 
                 let all = tv_res.concat(mv_res);
 
-                // игнорируем без created_at при сортировке по дате добавления
                 if (currentFilter.sort === 'created_at.desc') {
                     all = all.filter(i => i.created_at);
-                    all.sort((a, b) => {
-                        return new Date(b.created_at) - new Date(a.created_at);
-                    });
+                    all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                }
+
+                if (category.id === 'top100') {
+                    all.sort((a, b) => (b.vote_average || 0) - (a.vote_average || 0));
                 }
 
                 if (!all.length) {
@@ -446,7 +488,6 @@
                 }
 
                 renderItems(all);
-
                 last_page = page;
                 loading = false;
                 if (done) done();
@@ -458,7 +499,6 @@
 
         function renderItems(items) {
             let cards = Lampa.Template.get('items_line', { title: '' });
-
             let line = cards.find('.items-line__body');
 
             items.forEach((item) => {
