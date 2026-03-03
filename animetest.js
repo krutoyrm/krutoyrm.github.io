@@ -153,7 +153,7 @@
 
             Lampa.Activity.push({
                 url,
-                title: "Аниме TMDB",
+                title: "Аниме Rmk",
                 component: "category_full",
                 source: "tmdb",
                 page: 1
