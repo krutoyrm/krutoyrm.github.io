@@ -1,4 +1,4 @@
-/* Дорамы для Lampa — krutoyrm, 1.0.1.
+/* Дорамы для Lampa — krutoyrm, 1.0.2.
  * Independent implementation using Lampa's public component API.
  * Catalogue concept: https://github.com/xxhekpxx2307/Plagins/blob/main/Dorama.js
  */
@@ -6,7 +6,7 @@
     'use strict';
     if (window.krutoyrm_dorama_ready) return;
     window.krutoyrm_dorama_ready = true;
-    console.log('Dorama', '1.0.1 loaded');
+    console.log('Dorama', '1.0.2 loaded');
 
     var categories = [
         {title: 'Популярные', params: {'with_genres': '18', 'vote_count.gte': '30'}},
@@ -67,6 +67,9 @@
             url: 'discover/tv', params: row.params, page: 1});
     }
     function addMore(line, row) {
+        // NUMParser's global line/append hook rewrites more=false on short rows.
+        // Ownership, not that mutable flag, determines our explicit full-list action.
+        if (row.krutoyrm_dorama) row.more = true;
         if (row.more && !line.krutoyrm_dorama_more) {
             line.more();
             line.krutoyrm_dorama_more = true;
@@ -96,7 +99,7 @@
                     comp.activity.loader(false);
                     if (ready.length) {
                         comp.build(ready);
-                        console.log('Dorama', '1.0.1 built ' + ready.length + ' rows; More hooks: ' + typeof comp.onAppend + '/' + typeof comp.push);
+                        console.log('Dorama', '1.0.2 built ' + ready.length + ' rows; More hooks: ' + typeof comp.onAppend + '/' + typeof comp.push);
                     } else comp.empty();
                 }
             }
