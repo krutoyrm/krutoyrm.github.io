@@ -1,4 +1,4 @@
-/* Дорамы для Lampa — krutoyrm, 1.0.0.
+/* Дорамы для Lampa — krutoyrm, 1.0.1.
  * Independent implementation using Lampa's public component API.
  * Catalogue concept: https://github.com/xxhekpxx2307/Plagins/blob/main/Dorama.js
  */
@@ -6,6 +6,7 @@
     'use strict';
     if (window.krutoyrm_dorama_ready) return;
     window.krutoyrm_dorama_ready = true;
+    console.log('Dorama', '1.0.1 loaded');
 
     var categories = [
         {title: 'Популярные', params: {'with_genres': '18', 'vote_count.gte': '30'}},
@@ -93,7 +94,10 @@
                 if (!pending) {
                     var ready = rows.filter(function (row) {return !!row;});
                     comp.activity.loader(false);
-                    if (ready.length) comp.build(ready); else comp.empty();
+                    if (ready.length) {
+                        comp.build(ready);
+                        console.log('Dorama', '1.0.1 built ' + ready.length + ' rows; More hooks: ' + typeof comp.onAppend + '/' + typeof comp.push);
+                    } else comp.empty();
                 }
             }
             categories.forEach(function (category, index) {
