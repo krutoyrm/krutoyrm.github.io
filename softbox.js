@@ -1,4 +1,4 @@
-/* Softbox test plugin, 0.5.0. Public metadata; verified SOFTBOX; minimum 1080p. */
+/* Softbox test plugin, 0.6.0. Public metadata; verified SOFTBOX; minimum 1080p. */
 (function () {
     'use strict';
     function unescapeHtml(value) {
@@ -177,6 +177,42 @@
         });
         return strict1080({quality: quality, title: 'SOFTBOX'});
     }
+    function siteEpisodes(data) {
+        if (typeof data === 'string') data = JSON.parse(data.replace(/^\uFEFF/, ''));
+        if (!data || !data.success || typeof data.response !== 'string') throw new Error('На сайте нет списка серий OK.ru/VK/Mail.ru; возможен другой источник (Vibix)');
+        var items = [], labels = {ok: 'OK.ru', vk: 'VK', mail: 'Mail.ru'};
+        ['ok', 'vk', 'mail'].forEach(function (provider) {
+            episodes(data.response, provider).forEach(function (item) {
+                item.title += ' · ' + labels[provider];
+                item.source = provider;
+                item.voice = 'SOFTBOX';
+                items.push(item);
+            });
+        });
+        if (!items.length) throw new Error('На сайте нет серий для поддерживаемых источников OK.ru/VK/Mail.ru');
+        return items;
+    }
+    function siteCatalogue(text, page) {
+        if (typeof text !== 'string') throw new Error('Softbox: каталог сайта недоступен');
+        var items = [], seen = {}, match, pages = page;
+        var articles = /<article\b[^>]*\bclass=["'][^"']*\bmoviebox\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi;
+        while ((match = articles.exec(text))) {
+            var link = /<a\b[^>]*\bhref=["']((?:https:\/\/softboxdorama\.com)?\/(\d+)-[^"'\s<>]+\.html)["']/i.exec(match[1]);
+            var title = /<h2\b[^>]*>([\s\S]*?)<\/h2>/i.exec(match[1]);
+            if (!link || !title || seen[link[2]]) continue;
+            var name = unescapeHtml(title[1].replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+            if (!name) continue;
+            seen[link[2]] = true;
+            items.push({id: +link[2], name: name, title: name, source: 'site'});
+        }
+        if (!items.length) throw new Error('Softbox: каталог сайта пуст или формат изменился');
+        var navigation = /<span\b[^>]*class=["']navigation["'][^>]*>([\s\S]*?)<\/span>\s*<span\b[^>]*class=["']pnext["']/i.exec(text);
+        if (navigation) {
+            var links = /(?:https:\/\/softboxdorama\.com)?\/doramy\/page\/(\d+)\//g;
+            while ((match = links.exec(navigation[1]))) pages = Math.max(pages, +match[1]);
+        }
+        return {items: items, pages: pages, next: page < pages ? page + 1 : 0};
+    }
     var catalogue = [
         {"id": 1267353, "name": "Аварийная посадка любви", "seasons": [[624609, 624617, 624618, 631794, 631795, 631796, 631797, 631798, 631799, 624610, 624611, 624612, 624613, 624614, 624615, 624616]]},
         {"id": 4522058, "name": "Деловое предложение", "seasons": [[623391, 623392, 623393, 623394, 623395, 623396, 623397, 623398, 623399, 623400, 623401, 623402]]},
@@ -194,7 +230,7 @@
         item.title = item.name + ' · ' + item.fallback.length + ' серий';
         return item;
     });
-    var api = {episodes: episodes, streams: streams, vkStreams: vkStreams, mailStreams: mailStreams, fanEpisodes: fanEpisodes, fanStreams: fanStreams, strict1080: strict1080, catalogue: catalogue};
+    var api = {episodes: episodes, streams: streams, vkStreams: vkStreams, mailStreams: mailStreams, fanEpisodes: fanEpisodes, fanStreams: fanStreams, strict1080: strict1080, catalogue: catalogue, siteCatalogue: siteCatalogue, siteEpisodes: siteEpisodes};
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
     if (typeof Lampa === 'undefined' || window.softbox_test_ready) return;
     window.softbox_test_ready = true;
@@ -206,7 +242,8 @@
             {title: 'Аварийная посадка любви · 01 серия', url: 'https://vk.com/video_ext.php?oid=-79421595&id=456246686&hash=62706a9be228f3b7&hd=2'}
         ]},
         {title: 'Видео Mail.ru — Винченцо (нужен 1080p)', source: 'mail', id: 554, name: 'Винченцо'},
-        {title: 'Каталог дорам · SOFTBOX 1080p+', source: 'catalogue'}
+        {title: 'Проверенные источники · 5 дорам', source: 'verified'},
+        {title: 'Все дорамы сайта · живой каталог', source: 'catalogue'}
     ];
     var network = new Lampa.Reguest(), busy = false, current = sources[0];
     function fail(error) {
@@ -221,13 +258,14 @@
     function finish(data, episode, source) {
         data = strict1080(data);
         data.title = source.name + ' — ' + episode.title + ' · SOFTBOX';
-        Lampa.Storage.set('softbox_test_episode_' + source.source + (source.source === 'fan' ? '_' + source.id : ''), episode.title);
+        Lampa.Storage.set('softbox_test_episode_' + source.source + (source.source === 'fan' || source.site ? '_' + source.id : ''), episode.title);
         busy = false;
         Lampa.Player.play(data);
     }
     function play(episode) {
         if (busy) return;
         var source = current;
+        if (source.source === 'site') source = {source: episode.source, id: source.id, name: source.name, site: true};
         busy = true;
         Lampa.Noty.show('Softbox: получаю видеопоток 1080p…');
         if (source.source === 'fan') {
@@ -253,14 +291,49 @@
             } catch (error) { fail(error); }
         }, fail, false, {dataType: 'text', timeout: 20000});
     }
+    var sitePage = 1;
+    function openSiteCatalogue(page) {
+        if (busy) return;
+        page = typeof page === 'number' && page >= 1 && page % 1 === 0 ? page : 1;
+        busy = true;
+        var url = 'https://softboxdorama.com/doramy/' + (page > 1 ? 'page/' + page + '/' : '');
+        network.native(url, function (text) {
+            try {
+                var result = siteCatalogue(text, page), items = result.items;
+                sitePage = page;
+                if (page > 1) items.push({title: '← Предыдущая страница', page: page - 1});
+                if (result.next) items.push({title: 'Следующая страница →', page: result.next});
+                if (page > 2) items.push({title: 'К началу каталога', page: 1});
+                if (result.pages > page + 1) items.push({title: 'Последняя страница (' + result.pages + ')', page: result.pages});
+                busy = false;
+                Lampa.Select.show({title: 'Все дорамы SOFTBOX · ' + page + ' / ' + result.pages,
+                    items: items, onSelect: function (item) { if (item.page) openSiteCatalogue(item.page); else openSeries(item); }, onBack: open});
+            } catch (error) { fail(error); }
+        }, fail, false, {dataType: 'text', timeout: 20000});
+    }
     function openCatalogue() {
         if (busy) return;
         Lampa.Select.show({title: 'SOFTBOX · 1080p+ · ' + catalogue.length + ' дорам', items: catalogue, onSelect: openSeries, onBack: open});
     }
     function openSeries(source) {
         if (busy) return;
-        if (source.source === 'catalogue') return openCatalogue();
+        if (source.source === 'catalogue') return openSiteCatalogue();
+        if (source.source === 'verified') return openCatalogue();
         current = source;
+        if (source.source === 'site') {
+            if (!/^\d+$/.test(String(source.id))) return fail(new Error('Неверная дорама'));
+            busy = true;
+            network.native('https://softboxdorama.com/engine/ajax/playlists.php?news_id=' + source.id + '&xfield=playlist', function (text) {
+                try {
+                    var items = siteEpisodes(text);
+                    items.forEach(function (item) { item.selected = item.title === Lampa.Storage.get('softbox_test_episode_' + item.source + '_' + source.id, ''); });
+                    busy = false;
+                    Lampa.Select.show({title: source.name + ' · SOFTBOX · минимум 1080p', items: items,
+                        onSelect: play, onBack: function () { openSiteCatalogue(sitePage); }});
+                } catch (error) { fail(error); }
+            }, fail, false, {dataType: 'text', timeout: 20000});
+            return;
+        }
         if (source.source === 'fan') {
             busy = true;
             function showFan(items) {
@@ -302,13 +375,13 @@
     }
     function open() {
         if (busy) return;
-        Lampa.Select.show({title: 'Softbox тест · 0.5.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
+        Lampa.Select.show({title: 'Softbox тест · 0.6.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
     }
     function addMenu() {
         var menu = $('.menu .menu__list').eq(0);
         if (!menu.length || $('[data-softbox-test]').length) return;
         var item = $('<li class="menu__item selector" data-softbox-test="1"><div class="menu__ico">SB</div><div class="menu__text">Softbox тест</div></li>');
-        item.on('hover:enter', open);
+        item.on('hover:enter', openSiteCatalogue);
         menu.append(item);
     }
     if (window.appready) addMenu();
