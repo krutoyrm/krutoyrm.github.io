@@ -1,4 +1,4 @@
-/* Softbox test plugin, 0.4.0. Public metadata; verified SOFTBOX; minimum 1080p. */
+/* Softbox test plugin, 0.5.0. Public metadata; verified SOFTBOX; minimum 1080p. */
 (function () {
     'use strict';
     function unescapeHtml(value) {
@@ -177,7 +177,24 @@
         });
         return strict1080({quality: quality, title: 'SOFTBOX'});
     }
-    var api = {episodes: episodes, streams: streams, vkStreams: vkStreams, mailStreams: mailStreams, fanEpisodes: fanEpisodes, fanStreams: fanStreams, strict1080: strict1080};
+    var catalogue = [
+        {"id": 1267353, "name": "Аварийная посадка любви", "seasons": [[624609, 624617, 624618, 631794, 631795, 631796, 631797, 631798, 631799, 624610, 624611, 624612, 624613, 624614, 624615, 624616]]},
+        {"id": 4522058, "name": "Деловое предложение", "seasons": [[623391, 623392, 623393, 623394, 623395, 623396, 623397, 623398, 623399, 623400, 623401, 623402]]},
+        {"id": 1398965, "name": "Истинная красота", "seasons": [[663458, 663459, 663460, 663461, 663462, 663463, 663464, 663465, 663466, 663467, 663468, 663469, 663470, 663471, 663472, 663473]]},
+        {"id": 4872515, "name": "Алхимия душ", "seasons": [[624067, 624068, 624069, 624070, 624071, 624072, 624073, 624074, 624075, 624076, 624077, 624078, 624079, 624080, 624081, 624082, 624083, 624084, 624085, 624086], [624027, 624028, 624029, 624030, 624031, 624032, 624033, 624034, 624035, 624036]]},
+        {"id": 5229364, "name": "Королева слёз", "seasons": [[865371, 842449, 842450, 842451, 842452, 842453, 842454, 842455, 842456, 842457, 842458, 842459, 842460, 842461, 842462, 842463]]}
+    ].map(function (item) {
+        item.source = 'fan';
+        item.fallback = [];
+        item.seasons.forEach(function (ids, season) {
+            ids.forEach(function (id, episode) {
+                item.fallback.push({title: (season + 1) + ' сезон · ' + (episode + 1) + ' серия', video_id: String(id), voice: 'SOFTBOX'});
+            });
+        });
+        item.title = item.name + ' · ' + item.fallback.length + ' серий';
+        return item;
+    });
+    var api = {episodes: episodes, streams: streams, vkStreams: vkStreams, mailStreams: mailStreams, fanEpisodes: fanEpisodes, fanStreams: fanStreams, strict1080: strict1080, catalogue: catalogue};
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
     if (typeof Lampa === 'undefined' || window.softbox_test_ready) return;
     window.softbox_test_ready = true;
@@ -189,10 +206,7 @@
             {title: 'Аварийная посадка любви · 01 серия', url: 'https://vk.com/video_ext.php?oid=-79421595&id=456246686&hash=62706a9be228f3b7&hd=2'}
         ]},
         {title: 'Видео Mail.ru — Винченцо (нужен 1080p)', source: 'mail', id: 554, name: 'Винченцо'},
-        {title: 'FanSerials — Аварийная посадка любви · SOFTBOX 1080p', source: 'fan', id: 1267353, name: 'Аварийная посадка любви', fallback: [624609, 624617, 624618, 631794, 631795, 631796, 631797, 631798, 631799, 624610, 624611, 624612, 624613, 624614, 624615, 624616].map(function (id, index) {
-            // Verified public SOFTBOX voice 143 mapping; never cache signed playback URLs.
-            return {title: '1 сезон · ' + (index + 1) + ' серия', video_id: String(id), voice: 'SOFTBOX'};
-        })}
+        {title: 'Каталог дорам · SOFTBOX 1080p+', source: 'catalogue'}
     ];
     var network = new Lampa.Reguest(), busy = false, current = sources[0];
     function fail(error) {
@@ -207,7 +221,7 @@
     function finish(data, episode, source) {
         data = strict1080(data);
         data.title = source.name + ' — ' + episode.title + ' · SOFTBOX';
-        Lampa.Storage.set('softbox_test_episode_' + source.source, episode.title);
+        Lampa.Storage.set('softbox_test_episode_' + source.source + (source.source === 'fan' ? '_' + source.id : ''), episode.title);
         busy = false;
         Lampa.Player.play(data);
     }
@@ -239,16 +253,21 @@
             } catch (error) { fail(error); }
         }, fail, false, {dataType: 'text', timeout: 20000});
     }
+    function openCatalogue() {
+        if (busy) return;
+        Lampa.Select.show({title: 'SOFTBOX · 1080p+ · ' + catalogue.length + ' дорам', items: catalogue, onSelect: openSeries, onBack: open});
+    }
     function openSeries(source) {
         if (busy) return;
+        if (source.source === 'catalogue') return openCatalogue();
         current = source;
         if (source.source === 'fan') {
             busy = true;
             function showFan(items) {
-                var last = Lampa.Storage.get('softbox_test_episode_fan', '');
+                var last = Lampa.Storage.get('softbox_test_episode_fan_' + source.id, '');
                 items.forEach(function (item) { item.selected = item.title === last; });
                 busy = false;
-                Lampa.Select.show({title: source.name + ' · SOFTBOX · 1080p+', items: items, onSelect: play, onBack: open});
+                Lampa.Select.show({title: source.name + ' · SOFTBOX · 1080p+', items: items, onSelect: play, onBack: openCatalogue});
             }
             function savedFan() {
                 Lampa.Noty.show('Softbox: использую проверенный список SOFTBOX; ссылки будут свежими');
@@ -283,7 +302,7 @@
     }
     function open() {
         if (busy) return;
-        Lampa.Select.show({title: 'Softbox тест · 0.4.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
+        Lampa.Select.show({title: 'Softbox тест · 0.5.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
     }
     function addMenu() {
         var menu = $('.menu .menu__list').eq(0);
