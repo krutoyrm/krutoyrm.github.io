@@ -61,6 +61,20 @@
         }, reject);
     }
 
+    function openRow(row) {
+        Lampa.Activity.push({title: row.title, component: 'krutoyrm_dorama_view', source: 'tmdb',
+            url: 'discover/tv', params: row.params, page: 1});
+    }
+    function addMore(line, row) {
+        if (row.more && !line.krutoyrm_dorama_more) {
+            line.more();
+            line.krutoyrm_dorama_more = true;
+        }
+    }
+    Lampa.Listener.follow('line', function (event) {
+        if (event.type === 'visible' && event.data && event.data.krutoyrm_dorama) addMore(event.line, event.data);
+    });
+
     function Main(object) {
         var comp = new Lampa.InteractionMain(object), network = new Lampa.Reguest(), alive = true;
         var destroy = comp.destroy.bind(comp);
@@ -72,7 +86,8 @@
                 if (!alive) return;
                 if (json && json.results && json.results.length) {
                     rows[index] = {title: categories[index].title, results: json.results.slice(0, 5), more: true,
-                        source: 'tmdb', url: 'discover/tv', params: categories[index].params};
+                        source: 'tmdb', url: 'discover/tv', params: categories[index].params,
+                        krutoyrm_dorama: true, onMore: openRow};
                 }
                 pending--;
                 if (!pending) {
@@ -86,21 +101,13 @@
             });
             return comp.render();
         };
-        comp.onAppend = function (line, row) {
-            if (row.more && !line.krutoyrm_dorama_more) {
-                line.more();
-                line.krutoyrm_dorama_more = true;
-            }
-        };
+        comp.onAppend = addMore;
         var push = comp.push;
-        comp.push = function (line, row) {
+        if (push) comp.push = function (line, row) {
             push.call(comp, line, row);
-            comp.onAppend(line, row);
+            addMore(line, row);
         };
-        comp.onMore = function (row) {
-            Lampa.Activity.push({title: row.title, component: 'krutoyrm_dorama_view', source: 'tmdb',
-                url: 'discover/tv', params: row.params, page: 1});
-        };
+        comp.onMore = openRow;
         return comp;
     }
     function View(object) {
