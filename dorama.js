@@ -86,7 +86,17 @@
             });
             return comp.render();
         };
-        comp.onAppend = function (line, row) {if (row.more) line.more();};
+        comp.onAppend = function (line, row) {
+            if (row.more && !line.krutoyrm_dorama_more) {
+                line.more();
+                line.krutoyrm_dorama_more = true;
+            }
+        };
+        var push = comp.push;
+        comp.push = function (line, row) {
+            push.call(comp, line, row);
+            comp.onAppend(line, row);
+        };
         comp.onMore = function (row) {
             Lampa.Activity.push({title: row.title, component: 'krutoyrm_dorama_view', source: 'tmdb',
                 url: 'discover/tv', params: row.params, page: 1});
