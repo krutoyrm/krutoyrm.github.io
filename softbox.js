@@ -1,4 +1,4 @@
-/* Softbox test plugin, 0.2.0. Public OK.ru / VK / Mail.ru metadata only. */
+/* Softbox test plugin, 0.3.0. Public OK.ru / VK / Mail.ru metadata only. */
 (function () {
     'use strict';
     function unescapeHtml(value) {
@@ -65,6 +65,37 @@
             });
             if (url) return {url: url, quality: quality, title: params.md_title || 'VK'};
         }
+        var prefetch = /(?:"apiPrefetchCache"\s*:|(?:window\.)?cur\.apiPrefetchCache\s*=)\s*\[/.exec(text);
+        if (prefetch) {
+            var start = prefetch.index + prefetch[0].length - 1, depth = 0, quoted = false, escaped = false, end;
+            for (end = start; end < text.length; end++) {
+                var ch = text.charAt(end);
+                if (quoted) {
+                    if (escaped) escaped = false;
+                    else if (ch === '\\') escaped = true;
+                    else if (ch === '"') quoted = false;
+                } else if (ch === '"') quoted = true;
+                else if (ch === '[') depth++;
+                else if (ch === ']' && --depth === 0) break;
+            }
+            var cache = JSON.parse(text.slice(start, end + 1)), item;
+            cache.some(function (entry) {
+                if (entry.method === 'video.get' && entry.response && entry.response.items) {
+                    item = entry.response.items[0];
+                    return !!item;
+                }
+                return false;
+            });
+            var modernQuality = {}, modernUrl = '', modernBest = 0;
+            Object.keys(item && item.files || {}).forEach(function (key) {
+                var height = /^mp4_(\d+)$/.exec(key), value = item.files[key];
+                if (height && typeof value === 'string' && /^https:\/\/[^/\s]+\/[^\s]*$/.test(value)) {
+                    modernQuality[height[1] + 'p'] = value;
+                    if (+height[1] > modernBest) { modernBest = +height[1]; modernUrl = value; }
+                }
+            });
+            if (modernUrl) return {url: modernUrl, quality: modernQuality, title: unescapeHtml(item.title || 'VK')};
+        }
         throw new Error('VK не выдал публичный видеопоток: видео недоступно или требуется вход');
     }
     function mailStreams(text) {
@@ -87,7 +118,11 @@
     window.softbox_test_ready = true;
     var sources = [
         {title: 'OK.ru — Алхимия душ', source: 'ok', id: 715, name: 'Алхимия душ'},
-        {title: 'VK — Истинная красота (проверка доступа)', source: 'vk', id: 531, name: 'Истинная красота'},
+        {title: 'VK — официальный SOFTBOX', source: 'vk', name: 'SOFTBOX', items: [
+            {title: 'Этот парень — чёрный огненный дракон · 01 серия', url: 'https://vk.com/video_ext.php?oid=-79421595&id=456248310&hash=3561e403e348bca4&hd=2'},
+            {title: 'Этот парень — чёрный огненный дракон · 02 серия', url: 'https://vk.com/video_ext.php?oid=-79421595&id=456248311&hash=22e769385539ed76&hd=2'},
+            {title: 'Аварийная посадка любви · 01 серия', url: 'https://vk.com/video_ext.php?oid=-79421595&id=456246686&hash=62706a9be228f3b7&hd=2'}
+        ]},
         {title: 'Видео Mail.ru — Винченцо', source: 'mail', id: 554, name: 'Винченцо'}
     ];
     var network = new Lampa.Reguest(), busy = false, current = sources[0];
@@ -114,6 +149,10 @@
     function openSeries(source) {
         if (busy) return;
         current = source;
+        if (source.items) {
+            Lampa.Select.show({title: source.title, items: source.items, onSelect: play, onBack: open});
+            return;
+        }
         busy = true;
         Lampa.Noty.show('Softbox: загружаю серии…');
         network.native('https://softboxdorama.com/engine/ajax/playlists.php?news_id=' + source.id + '&xfield=playlist', function (text) {
@@ -131,7 +170,7 @@
     }
     function open() {
         if (busy) return;
-        Lampa.Select.show({title: 'Softbox тест · 0.2.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
+        Lampa.Select.show({title: 'Softbox тест · 0.3.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
     }
     function addMenu() {
         var menu = $('.menu .menu__list').eq(0);
