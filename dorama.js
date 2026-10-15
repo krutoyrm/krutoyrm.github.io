@@ -1,4 +1,4 @@
-/* Дорамы для Lampa — krutoyrm, 1.0.2.
+/* Дорамы для Lampa — krutoyrm, 1.0.3.
  * Independent implementation using Lampa's public component API.
  * Catalogue concept: https://github.com/xxhekpxx2307/Plagins/blob/main/Dorama.js
  */
@@ -6,7 +6,7 @@
     'use strict';
     if (window.krutoyrm_dorama_ready) return;
     window.krutoyrm_dorama_ready = true;
-    console.log('Dorama', '1.0.2 loaded');
+    console.log('Dorama', '1.0.3 loaded');
 
     var categories = [
         {title: 'Популярные', params: {'with_genres': '18', 'vote_count.gte': '30'}},
@@ -76,7 +76,22 @@
         }
     }
     Lampa.Listener.follow('line', function (event) {
-        if (event.type === 'visible' && event.data && event.data.krutoyrm_dorama) addMore(event.line, event.data);
+        if (event.type !== 'visible' || !event.data || !event.data.krutoyrm_dorama) return;
+        addMore(event.line, event.data);
+        // More is created while the row is detached. Size it only after mounting;
+        // otherwise older TV styles can render a zero-height horizontal strip.
+        if (!event.line.render) return;
+        var root = event.line.render(true);
+        if (!root || !root.querySelector) return;
+        var poster = root.querySelector('.card__view'), more = root.querySelector('.card-more');
+        var box = root.querySelector('.card-more__box');
+        if (poster && more && box) {
+            var rect = poster.getBoundingClientRect();
+            if (rect.height > 0 && rect.width > 0) {
+                more.style.width = rect.width + 'px';
+                box.style.height = rect.height + 'px';
+            }
+        }
     });
 
     function Main(object) {
@@ -99,7 +114,7 @@
                     comp.activity.loader(false);
                     if (ready.length) {
                         comp.build(ready);
-                        console.log('Dorama', '1.0.2 built ' + ready.length + ' rows; More hooks: ' + typeof comp.onAppend + '/' + typeof comp.push);
+                        console.log('Dorama', '1.0.3 built ' + ready.length + ' rows; More hooks: ' + typeof comp.onAppend + '/' + typeof comp.push);
                     } else comp.empty();
                 }
             }
