@@ -1,16 +1,22 @@
-/* Softbox test plugin, 0.1.0. Only publicly accessible OK.ru embeds. */
+/* Softbox test plugin, 0.2.0. Public OK.ru / VK / Mail.ru metadata only. */
 (function () {
     'use strict';
     function unescapeHtml(value) {
         return value.replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     }
-    function episodes(text) {
+    function episodes(text, source) {
+        source = source || 'ok';
+        var allowed = {
+            ok: /^https:\/\/ok\.ru\/videoembed\/\d+(?:\?.*)?$/,
+            vk: /^https:\/\/(?:vk\.com|vkvideo\.ru)\/video_ext\.php\?[^\s]+$/,
+            mail: /^https:\/\/my\.mail\.ru\/video\/embed\/\d+$/
+        };
         var result = [], seen = {}, match;
         var pattern = /<li\b([^>]*\bdata-file\s*=\s*(["'])(.*?)\2[^>]*)>([\s\S]*?)<\/li>/gi;
         while ((match = pattern.exec(text))) {
-            var url = unescapeHtml(match[3]);
+            var url = unescapeHtml(unescapeHtml(match[3]));
             if (url.indexOf('//') === 0) url = 'https:' + url;
-            if (!/^https:\/\/ok\.ru\/videoembed\/\d+(?:\?.*)?$/.test(url) || seen[url]) continue;
+            if (!allowed[source] || !allowed[source].test(url) || seen[url]) continue;
             var title = unescapeHtml(match[4].replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
             seen[url] = true;
             result.push({title: title, url: url});
@@ -39,45 +45,93 @@
         }
         throw new Error('OK.ru не выдал доступный видеопоток');
     }
-    var api = {episodes: episodes, streams: streams};
+    function vkStreams(text) {
+        var notice = unescapeHtml(text.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '').replace(/<[^>]+>/g, ' '));
+        if (/jugendgef|adult content|возрастн|18\+/i.test(notice)) throw new Error('VK: ограничение 18+, встраивание запрещено');
+        if (/Urheberrechtsbeschwerde|copyright|правообладател/i.test(notice)) throw new Error('VK: видео удалено по жалобе правообладателя');
+        if (/Autor hat den Zugriff|author.*restricted|Автор.*огранич|доступ.*огранич/i.test(notice)) throw new Error('VK: Автор ограничил доступ к видео');
+        var match = /var\s+playerParams\s*=\s*({[\s\S]+?})\s*;/.exec(text);
+        if (match) {
+            var data = JSON.parse(match[1]), params = data.params && data.params[0];
+            var quality = {}, url = '', best = 0;
+            Object.keys(params || {}).forEach(function (key) {
+                var height = /^url(\d+)$/.exec(key), value = params[key];
+                if (height && typeof value === 'string') {
+                    if (value.indexOf('//') === 0) value = 'https:' + value;
+                    if (!/^https:\/\/[^/\s]+\/[^\s]*$/.test(value)) return;
+                    quality[height[1] + 'p'] = value;
+                    if (+height[1] > best) { best = +height[1]; url = value; }
+                }
+            });
+            if (url) return {url: url, quality: quality, title: params.md_title || 'VK'};
+        }
+        throw new Error('VK не выдал публичный видеопоток: видео недоступно или требуется вход');
+    }
+    function mailStreams(text) {
+        var metadata = typeof text === 'string' ? JSON.parse(text.replace(/^\uFEFF/, '')) : text;
+        var quality = {}, url = '', best = 0;
+        (metadata.videos || []).forEach(function (item) {
+            var value = item.url, height = parseInt(item.key, 10);
+            if (typeof value !== 'string' || !height) return;
+            if (value.indexOf('//') === 0) value = 'https:' + value;
+            if (!/^https:\/\/(?:[a-z0-9-]+\.)*my\.mail\.ru\/[^\s]*$/i.test(value)) return;
+            quality[item.key] = value;
+            if (height > best) { best = height; url = value; }
+        });
+        if (!url) throw new Error('Mail.ru не выдал доступный видеопоток');
+        return {url: url, quality: quality, title: metadata.meta && metadata.meta.title || 'Видео Mail.ru'};
+    }
+    var api = {episodes: episodes, streams: streams, vkStreams: vkStreams, mailStreams: mailStreams};
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
     if (typeof Lampa === 'undefined' || window.softbox_test_ready) return;
     window.softbox_test_ready = true;
-    var network = new Lampa.Reguest(), busy = false;
+    var sources = [
+        {title: 'OK.ru — Алхимия душ', source: 'ok', id: 715, name: 'Алхимия душ'},
+        {title: 'VK — Истинная красота (проверка доступа)', source: 'vk', id: 531, name: 'Истинная красота'},
+        {title: 'Видео Mail.ru — Винченцо', source: 'mail', id: 554, name: 'Винченцо'}
+    ];
+    var network = new Lampa.Reguest(), busy = false, current = sources[0];
     function fail(error) {
         busy = false;
-        Lampa.Noty.show('Softbox: ' + (error.message || error.decode_error || 'Ошибка загрузки'));
+        Lampa.Noty.show('Softbox: ' + (error && (error.message || error.decode_error || (error.status === 404 && 'Видео удалено или недоступно (404)')) || 'Ошибка загрузки'));
         Lampa.Controller.toggle('menu');
     }
     function play(episode) {
         busy = true;
         Lampa.Noty.show('Softbox: получаю видеопоток…');
-        network.native(episode.url, function (text) {
+        var requestUrl = episode.url;
+        if (current.source === 'mail') requestUrl = 'https://my.mail.ru/+/video/meta/' + episode.url.split('/').pop();
+        network.native(requestUrl, function (text) {
             try {
-                var data = streams(text);
+                var data = current.source === 'vk' ? vkStreams(text) : current.source === 'mail' ? mailStreams(text) : streams(text);
                 busy = false;
-                data.title = 'Алхимия душ — ' + episode.title + ' · SOFTBOX';
-                Lampa.Storage.set('softbox_test_episode', episode.title);
+                data.title = current.name + ' — ' + episode.title + ' · SOFTBOX';
+                Lampa.Storage.set('softbox_test_episode_' + current.source, episode.title);
                 Lampa.Player.play(data);
+            } catch (error) { fail(error); }
+        }, fail, false, {dataType: 'text', timeout: 20000});
+    }
+    function openSeries(source) {
+        if (busy) return;
+        current = source;
+        busy = true;
+        Lampa.Noty.show('Softbox: загружаю серии…');
+        network.native('https://softboxdorama.com/engine/ajax/playlists.php?news_id=' + source.id + '&xfield=playlist', function (text) {
+            try {
+                var json = typeof text === 'string' ? JSON.parse(text.replace(/^\uFEFF/, '')) : text;
+                if (!json.success) throw new Error('Список серий недоступен');
+                var items = episodes(json.response, source.source);
+                if (!items.length) throw new Error('Нет серий для выбранного источника');
+                var last = Lampa.Storage.get('softbox_test_episode_' + source.source, '');
+                items.forEach(function (item) { item.selected = item.title === last; });
+                busy = false;
+                Lampa.Select.show({title: source.name + ' · ' + source.source.toUpperCase(), items: items, onSelect: play, onBack: open});
             } catch (error) { fail(error); }
         }, fail, false, {dataType: 'text', timeout: 20000});
     }
     function open() {
         if (busy) return;
-        busy = true;
-        Lampa.Noty.show('Softbox: загружаю серии…');
-        network.native('https://softboxdorama.com/engine/ajax/playlists.php?news_id=715&xfield=playlist', function (text) {
-            try {
-                var json = typeof text === 'string' ? JSON.parse(text.replace(/^\uFEFF/, '')) : text;
-                if (!json.success) throw new Error('Список серий недоступен');
-                var items = episodes(json.response);
-                if (!items.length) throw new Error('Нет доступных серий OK.ru');
-                var last = Lampa.Storage.get('softbox_test_episode', '');
-                items.forEach(function (item) { item.selected = item.title === last; });
-                busy = false;
-                Lampa.Select.show({title: 'Алхимия душ · SOFTBOX', items: items, onSelect: play, onBack: function () { Lampa.Controller.toggle('menu'); }});
-            } catch (error) { fail(error); }
-        }, fail, false, {dataType: 'text', timeout: 20000});
+        Lampa.Select.show({title: 'Softbox тест · 0.2.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
     }
     function addMenu() {
         var menu = $('.menu .menu__list').eq(0);
