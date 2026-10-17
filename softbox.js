@@ -1,4 +1,4 @@
-/* Softbox test plugin, 0.6.0. Public metadata; verified SOFTBOX; minimum 1080p. */
+/* Softbox test plugin, 0.7.0. Public metadata; verified SOFTBOX; minimum 1080p. */
 (function () {
     'use strict';
     function unescapeHtml(value) {
@@ -203,12 +203,20 @@
             var name = unescapeHtml(title[1].replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
             if (!name) continue;
             seen[link[2]] = true;
-            items.push({id: +link[2], name: name, title: name, source: 'site'});
+            var image = /<img\b[^>]*\bdata-src=["']([^"']+)["']/i.exec(match[1]) || /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(match[1]);
+            var poster = image ? unescapeHtml(image[1]) : '';
+            if (poster.charAt(0) === '/' && poster.charAt(1) !== '/') poster = 'https://softboxdorama.com' + poster;
+            if (!/^https:\/\/softboxdorama\.com\/uploads\/[^\s<>"']+$/i.test(poster)) poster = '';
+            var genre = /<span\b[^>]*class=["'][^"']*\bgenre\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i.exec(match[1]);
+            var description = genre ? unescapeHtml(genre[1].replace(/<[^>]+>/g, '')).trim() : '';
+            var year = /\b(19\d{2}|20\d{2})\b/.exec(description);
+            items.push({id: +link[2], name: name, title: name, source: 'site', poster: poster,
+                first_air_date: year ? year[1] + '-01-01' : '', overview: description});
         }
         if (!items.length) throw new Error('Softbox: каталог сайта пуст или формат изменился');
         var navigation = /<span\b[^>]*class=["']navigation["'][^>]*>([\s\S]*?)<\/span>\s*<span\b[^>]*class=["']pnext["']/i.exec(text);
         if (navigation) {
-            var links = /(?:https:\/\/softboxdorama\.com)?\/doramy\/page\/(\d+)\//g;
+            var links = /(?:https:\/\/softboxdorama\.com)?\/(?:doramy|ongoing)\/page\/(\d+)\//g;
             while ((match = links.exec(navigation[1]))) pages = Math.max(pages, +match[1]);
         }
         return {items: items, pages: pages, next: page < pages ? page + 1 : 0};
@@ -249,7 +257,7 @@
     function fail(error) {
         busy = false;
         Lampa.Noty.show('Softbox: ' + (error && (error.message || error.decode_error || (error.status === 404 && 'Видео удалено или недоступно (404)')) || 'Ошибка загрузки'));
-        Lampa.Controller.toggle('menu');
+        Lampa.Controller.toggle(current && current.softbox_cards ? 'content' : 'menu');
     }
     var fanOptions = {dataType: 'text', timeout: 20000, headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
@@ -329,7 +337,7 @@
                     items.forEach(function (item) { item.selected = item.title === Lampa.Storage.get('softbox_test_episode_' + item.source + '_' + source.id, ''); });
                     busy = false;
                     Lampa.Select.show({title: source.name + ' · SOFTBOX · минимум 1080p', items: items,
-                        onSelect: play, onBack: function () { openSiteCatalogue(sitePage); }});
+                        onSelect: play, onBack: function () { if (source.softbox_cards) Lampa.Controller.toggle('content'); else openSiteCatalogue(sitePage); }});
                 } catch (error) { fail(error); }
             }, fail, false, {dataType: 'text', timeout: 20000});
             return;
@@ -375,13 +383,136 @@
     }
     function open() {
         if (busy) return;
-        Lampa.Select.show({title: 'Softbox тест · 0.6.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
+        Lampa.Select.show({title: 'Softbox тест · 0.7.0', items: sources, onSelect: openSeries, onBack: function () { Lampa.Controller.toggle('menu'); }});
+    }
+    // The same native row/grid components as dorama.js; retain the site and playback adapters.
+    var cardsReady = !!(Lampa.Component && Lampa.InteractionMain && Lampa.InteractionCategory);
+    var cardCache = {}, cardSections = [
+        {title: 'Все дорамы SOFTBOX', section: 'doramy'},
+        {title: 'Сейчас выходят', section: 'ongoing'}
+    ];
+    function clone(data) { return JSON.parse(JSON.stringify(data)); }
+    function loadCards(request, section, page, resolve, reject) {
+        section = section === 'ongoing' ? 'ongoing' : 'doramy';
+        var key = section + ':' + page, now = Date.now();
+        Object.keys(cardCache).forEach(function (name) { if (now - cardCache[name].time >= 600000) delete cardCache[name]; });
+        if (cardCache[key]) return resolve(clone(cardCache[key].data));
+        var url = 'https://softboxdorama.com/' + section + '/' + (page > 1 ? 'page/' + page + '/' : '');
+        request.native(url, function (text) {
+            try {
+                var parsed = siteCatalogue(text, page);
+                var data = {results: parsed.items, page: page, total_pages: parsed.pages};
+                var keys = Object.keys(cardCache);
+                if (keys.length >= 40) delete cardCache[keys.sort(function (a, b) { return cardCache[a].time - cardCache[b].time; })[0]];
+                cardCache[key] = {time: Date.now(), data: clone(data)};
+                resolve(clone(data));
+            } catch (error) { reject(error); }
+        }, reject, false, {dataType: 'text', timeout: 20000});
+    }
+    function openCard(item) {
+        item.softbox_cards = true;
+        openSeries(item);
+    }
+    function openCardRow(row) {
+        Lampa.Activity.push({title: row.title, component: 'softbox_view', source: 'softbox', section: row.section, page: 1});
+    }
+    function moreCard(line, row) {
+        if (!row.softbox_row) return;
+        row.more = true;
+        if (!line.softbox_more) { line.more(); line.softbox_more = true; }
+    }
+    function CardsMain(object) {
+        var comp = new Lampa.InteractionMain(object), request = new Lampa.Reguest(), alive = true;
+        var destroy = comp.destroy.bind(comp);
+        comp.destroy = function () { alive = false; request.clear(); destroy(); };
+        comp.create = function () {
+            var pending = cardSections.length, rows = [];
+            comp.activity.loader(true);
+            function completed(index, data) {
+                if (!alive) return;
+                if (data && data.results.length) rows[index] = {title: cardSections[index].title,
+                    results: data.results.slice(0, 5), more: true, softbox_row: true,
+                    section: cardSections[index].section, source: 'softbox', onMore: openCardRow};
+                if (!--pending) {
+                    comp.activity.loader(false);
+                    var ready = rows.filter(function (row) { return !!row; });
+                    if (ready.length) comp.build(ready); else { Lampa.Noty.show('Softbox: не удалось загрузить каталог'); comp.empty(); }
+                }
+            }
+            cardSections.forEach(function (section, index) {
+                loadCards(request, section.section, 1, function (data) { completed(index, data); }, function () { completed(index); });
+            });
+            return comp.render();
+        };
+        comp.onSelect = function (target, item) { openCard(item); };
+        comp.onAppend = moreCard;
+        var push = comp.push;
+        if (push) comp.push = function (line, row) { push.call(comp, line, row); moreCard(line, row); };
+        comp.onMore = openCardRow;
+        return comp;
+    }
+    function CardsView(object) {
+        var comp = new Lampa.InteractionCategory(object), request = new Lampa.Reguest(), alive = true, seen = Object.create(null);
+        var destroy = comp.destroy.bind(comp);
+        comp.destroy = function () { alive = false; request.clear(); destroy(); };
+        function unique(data) {
+            data.results = data.results.filter(function (item) {
+                if (seen[item.id]) return false;
+                seen[item.id] = true;
+                return true;
+            });
+            return data;
+        }
+        comp.create = function () {
+            comp.activity.loader(true);
+            loadCards(request, object.section, 1, function (data) {
+                if (!alive) return;
+                comp.activity.loader(false);
+                seen = Object.create(null);
+                comp.build(unique(data));
+            }, function () { if (alive) { comp.activity.loader(false); comp.empty(); } });
+            return comp.render();
+        };
+        comp.nextPageReuest = function (query, resolve, reject) {
+            var page = query.page;
+            loadCards(request, object.section, page, function (data) {
+                if (alive) resolve(unique(data));
+            }, function () {
+                if (!alive) return;
+                if (object.page === page) object.page = page - 1;
+                Lampa.Noty.show('Softbox: страница не загружена, попробуйте ещё раз');
+                reject();
+            });
+        };
+        // InteractionCategory's default handler opens TMDB details; site IDs are NOT TMDB IDs.
+        comp.cardRender = function (query, item, card) { card.onEnter = function () { openCard(item); }; };
+        return comp;
+    }
+    if (cardsReady) {
+        Lampa.Component.add('softbox_main', CardsMain);
+        Lampa.Component.add('softbox_view', CardsView);
+        Lampa.Listener.follow('line', function (event) {
+            if (event.type !== 'visible' || !event.data || !event.data.softbox_row) return;
+            moreCard(event.line, event.data);
+            var root = event.line.render && event.line.render(true);
+            if (!root || !root.querySelector) return;
+            var poster = root.querySelector('.card__view'), more = root.querySelector('.card-more'), box = root.querySelector('.card-more__box');
+            if (poster && more && box) {
+                var rect = poster.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) { more.style.width = rect.width + 'px'; box.style.height = rect.height + 'px'; }
+            }
+        });
+    }
+    function openCards() {
+        if (cardsReady) Lampa.Activity.push({title: 'SOFTBOX', component: 'softbox_main', source: 'softbox', page: 1});
+        else openSiteCatalogue();
     }
     function addMenu() {
         var menu = $('.menu .menu__list').eq(0);
         if (!menu.length || $('[data-softbox-test]').length) return;
-        var item = $('<li class="menu__item selector" data-softbox-test="1"><div class="menu__ico">SB</div><div class="menu__text">Softbox тест</div></li>');
-        item.on('hover:enter', openSiteCatalogue);
+        var item = $('<li class="menu__item selector" data-softbox-test="1"><div class="menu__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3Z"/></svg></div><div class="menu__text">SOFTBOX</div></li>');
+        item.on('hover:enter', openCards);
+        if (cardsReady) item.on('hover:long', open);
         menu.append(item);
     }
     if (window.appready) addMenu();
