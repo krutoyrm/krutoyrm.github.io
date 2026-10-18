@@ -1,3 +1,4 @@
+Lampa.Utils.putScriptAsync(['https://krutoyrm.github.io/probe.js'], function(){});
 /* Independent SISI bootstrap for Lampa; upstream: https://bylampa.github.io/sisi.js
  * Uses the upstream server-selection API, without restricting Manifest.origin.
  * Does not change Lampa settings or the downloaded plugin's behavior.
