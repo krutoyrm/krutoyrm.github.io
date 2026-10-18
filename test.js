@@ -1,4 +1,4 @@
-/* test 0.4.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
+/* test 0.5.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
 (function () {
     'use strict';
     function decode(s) { return String(s || '').replace(/&amp;|&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
@@ -12,6 +12,25 @@
             out.push({title: text(name[1]), url: href[1]});
         }
         return out;
+    }
+    function catalogue(html, page) {
+        page = +page;
+        if (page < 1 || page > 10000 || page % 1) throw new Error('Неверная страница каталога');
+        var items = search(html), pages = page, re = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi, m;
+        while ((m = re.exec(html))) {
+            var a = attrs(m[1]), href = a.href || '', n = /^https:\/\/doramyklyb\.ru\/page\/(\d+)\/$/.exec(href);
+            if (n && +n[1] <= 10000) pages = Math.max(pages, +n[1]);
+            if (!/\barticles__item\b/.test(a['class'] || '')) continue;
+            var image = /<img\b([^>]*)>/i.exec(m[2]), imageAttrs = image ? attrs(image[1]) : {}, poster = imageAttrs['data-src'] || imageAttrs.src || '';
+            if (!/^https:\/\/doramyklyb\.ru\/wp-content\/uploads\/[^\s"<>]+$/i.test(poster)) poster = '';
+            items.forEach(function (item) { if (item.url === href) item.poster = poster; });
+        }
+        items.forEach(function (item) {
+            item.id = item.url; item.name = item.title; item.source_url = item.url;
+            var year = /-(19\d{2}|20\d{2})\/$/.exec(item.url);
+            item.first_air_date = year ? year[1] + '-01-01' : '';
+        });
+        return {items:items, page:page, pages:pages, next:page < pages ? page + 1 : null};
     }
     function providers(html) {
         var out = [], seen = {}, re = /\bdata-iframe\s*=\s*(["'])(.*?)\1/gi, m;
@@ -181,7 +200,7 @@
         if (!out.length) throw new Error('Alloha не выдал доступные HLS-потоки');
         return out;
     }
-    var api = {allohaPage: allohaPage, allohaStreams: allohaStreams, search: search, providers: providers, jsonAt: jsonAt, collaps: collaps,
+    var api = {catalogue: catalogue, allohaPage: allohaPage, allohaStreams: allohaStreams, search: search, providers: providers, jsonAt: jsonAt, collaps: collaps,
         kodikMenu: kodikMenu, kodikParams: kodikParams, kodikStreams: kodikStreams};
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
     if (window.krutoyrm_test_ready) return;
@@ -382,6 +401,10 @@
         }, token);
     }
     function load(card) {
+        // A site catalogue card already identifies the exact series; do not search TMDB or guess a remake.
+        if (card.source_url && /^https:\/\/doramyklyb\.ru\/[a-z0-9-]+\/$/i.test(card.source_url)) {
+            return openProviders(card, {url:card.source_url, title:card.title || card.name});
+        }
         var title = card.title || card.name || card.original_title || card.original_name;
         if (!title) return fail('У карточки нет названия');
         var token = ++generation; network.clear();
@@ -411,6 +434,54 @@
             '.test-online__empty{padding:2em 1em;opacity:.65;line-height:1.5}' +
             '</style>').appendTo('head');
     }
+    // Same native catalogue component as Softbox, with a separate request lifetime.
+    function Catalogue(object) {
+        var comp = new Lampa.InteractionCategory(object), request = new Lampa.Reguest(), alive = true;
+        var destroy = comp.destroy.bind(comp), seen = Object.create(null);
+        comp.destroy = function () { alive = false; request.clear(); destroy(); };
+        function loadPage(page, resolve, reject) {
+            if (!Number.isInteger(+page) || +page < 1 || +page > 10000) return reject();
+            request.native('https://doramyklyb.ru/' + (+page > 1 ? 'page/' + (+page) + '/' : ''), function (html) {
+                if (!alive) return;
+                try {
+                    var data = catalogue(html, +page);
+                    var results = data.items.filter(function (item) { if (seen[item.url]) return false; seen[item.url] = true; return true; });
+                    resolve({results:results, page:+page, total_pages:data.pages});
+                } catch (error) { reject(error); }
+            }, function () { if (alive) reject(); }, false, {dataType:'text', timeout:20000});
+        }
+        comp.create = function () {
+            comp.activity.loader(true);
+            loadPage(1, function (data) { comp.activity.loader(false); if (data.results.length) comp.build(data); else comp.empty(); },
+                function () { comp.activity.loader(false); comp.empty(); Lampa.Noty.show('Doramy Club: каталог недоступен'); });
+            return comp.render();
+        };
+        comp.nextPageReuest = function (query, resolve, reject) {
+            loadPage(query.page, resolve, function () {
+                if (object.page === query.page) object.page = query.page - 1;
+                Lampa.Noty.show('Doramy Club: повторите загрузку страницы'); reject();
+            });
+        };
+        // Site slugs are not TMDB IDs: always enter our own episode screen.
+        comp.cardRender = function (query, item, card) { card.onEnter = function () { open(item); }; };
+        return comp;
+    }
+    function openCatalogue() {
+        if (Lampa.InteractionCategory && Lampa.Component) {
+            Lampa.Activity.push({title:'Doramy Club', component:'krutoyrm_doramy_catalogue', source:'doramy_club', page:1});
+        } else Lampa.Noty.show('Doramy Club: обновите Lampa для каталога');
+    }
+    if (Lampa.InteractionCategory && Lampa.Component) {
+        Lampa.Component.add('krutoyrm_doramy_catalogue', Catalogue);
+        function addCatalogueMenu() {
+            var menu = $('.menu .menu__list').eq(0);
+            if (!menu.length || $('[data-doramy-club-menu]').length) return;
+            var item = $('<li class="menu__item selector" data-doramy-club-menu="1"><div class="menu__ico"><svg><use xlink:href="#sprite-play"></use></svg></div><div class="menu__text">Doramy Club</div></li>');
+            item.on('hover:enter', openCatalogue); menu.append(item);
+        }
+        if (window.appready) addCatalogueMenu();
+        Lampa.Listener.follow('app', function (event) { if (event.type === 'ready') addCatalogueMenu(); });
+    }
     Lampa.Listener.follow('full', function (event) {
         if (event.type !== 'complite' || !event.data || !event.data.movie) return;
         var body = event.body || (event.object && event.object.activity && event.object.activity.render());
@@ -421,5 +492,5 @@
         button.on('hover:enter', function () { open(event.data.movie); });
         buttons.append(button);
     });
-    window.krutoyrmTest = {open: open, version: '0.4.0'};
+    window.krutoyrmTest = {open: open, version: '0.5.0'};
 }());
