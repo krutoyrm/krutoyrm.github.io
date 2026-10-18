@@ -412,8 +412,10 @@
             '</style>').appendTo('head');
     }
     Lampa.Listener.follow('full', function (event) {
-        if (event.type !== 'complite' || !event.data || !event.data.movie || !event.body) return;
-        var body = event.body, buttons = body.find('.full-start-new__buttons, .full-start__buttons').first();
+        if (event.type !== 'complite' || !event.data || !event.data.movie) return;
+        var body = event.body || (event.object && event.object.activity && event.object.activity.render());
+        if (!body || !body.find) return;
+        var buttons = body.find('.full-start-new__buttons, .full-start__buttons').first();
         if (!buttons.length || body.find('[data-krutoyrm-test]').length) return;
         var button = $('<div class="full-start__button selector view--online" data-krutoyrm-test="1"><svg><use xlink:href="#sprite-play"></use></svg><span>test</span></div>');
         button.on('hover:enter', function () { open(event.data.movie); });
