@@ -1,4 +1,4 @@
-/* test 0.5.2 — independent direct-host online provider for Lampa. No Lampac proxy. */
+/* test 0.5.3 — independent direct-host online provider for Lampa. No Lampac proxy. */
 (function () {
     'use strict';
     function decode(s) { return String(s || '').replace(/&amp;|&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
@@ -445,11 +445,12 @@
         if (event.type !== 'complite' || !event.data || !event.data.movie) return;
         var body = event.body || (event.object && event.object.activity && event.object.activity.render());
         if (!body || !body.find) return;
-        var buttons = body.find('.full-start-new__buttons, .full-start__buttons').first();
+        var buttons = body.find('.buttons--container').first();
+        if (!buttons.length) buttons = body.find('.full-start-new__buttons, .full-start__buttons').first();
         if (!buttons.length || body.find('[data-krutoyrm-test]').length) return;
         var button = $('<div class="full-start__button selector view--online" data-krutoyrm-test="1"><svg><use xlink:href="#sprite-play"></use></svg><span>test</span></div>');
         button.on('hover:enter', function () { open(event.data.movie); });
         buttons.append(button);
     });
-    window.krutoyrmTest = {open: open, version: '0.5.2'};
+    window.krutoyrmTest = {open: open, version: '0.5.3'};
 }());
