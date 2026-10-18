@@ -1,4 +1,4 @@
-/* test 0.5.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
+/* test 0.5.1 — independent direct-host online provider for Lampa. No Lampac proxy. */
 (function () {
     'use strict';
     function decode(s) { return String(s || '').replace(/&amp;|&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
@@ -336,7 +336,7 @@
                         get('https://kodikplayer.com/ftor', function (answer) {
                             var media = kodikStreams(answer);
                             media.title = match.title + ' · ' + voice.title + ' · ' + episode.title;
-                            media.timeline = true;
+                            // Like Softbox, let Lampa construct its own timeline object.
                             Lampa.Player.play(media);
                             // Resolve each episode on demand; iframe links must never enter Player.playlist.
                             Lampa.Player.playlist([media]);
@@ -358,7 +358,7 @@
                 get(helper,function(answer){
                     var voices=allohaStreams(answer);
                     select('Alloha · озвучка',voices,function(voice){
-                        var media={url:voice.quality['1080p'] || voice.quality['720p'] || voice.url,quality:voice.quality,subtitles:voice.subtitles,title:match.title+' · '+entry.title+' · '+voice.title,timeline:true};
+                        var media={url:voice.quality['1080p'] || voice.quality['720p'] || voice.url,quality:voice.quality,subtitles:voice.subtitles,title:match.title+' · '+entry.title+' · '+voice.title};
                         Lampa.Player.play(media);Lampa.Player.playlist([media]);
                     },chooseEpisode);
                 },freshToken);
@@ -389,7 +389,7 @@
                             var playlist = collaps(fresh), index = -1;
                             playlist.some(function (e, i) { if (e.season === entry.season && String(e.episode) === String(entry.episode)) { index = i; return true; } return false; });
                             if (index < 0) return fail('Серия больше недоступна');
-                            var videos = playlist.map(function (e) { return {title: match.title + ' · ' + e.title, url: e.url, subtitles: e.subtitles, timeline: true}; });
+                            var videos = playlist.map(function (e) { return {title: match.title + ' · ' + e.title, url: e.url, subtitles: e.subtitles}; });
                             Lampa.Player.play(videos[index]);
                             Lampa.Player.playlist(videos);
                         }, freshToken);
@@ -492,5 +492,5 @@
         button.on('hover:enter', function () { open(event.data.movie); });
         buttons.append(button);
     });
-    window.krutoyrmTest = {open: open, version: '0.5.0'};
+    window.krutoyrmTest = {open: open, version: '0.5.1'};
 }());
