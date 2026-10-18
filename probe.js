@@ -5,8 +5,8 @@
  window.sisiProbeActive=true;
  function report(d){try{var n=new Lampa.Reguest();n.timeout(5000);n.native('http://127.0.0.1:18766/report?d='+encodeURIComponent(JSON.stringify(d)),function(){},function(){},false,{dataType:'text'});}catch(e){console.log('SisiProbe',e.message);}}
  function snapshot(){
-  var a=Lampa.Activity.active(),images=Array.prototype.map.call(document.querySelectorAll('.activity--active .card__img'),function(x){return {src:x.getAttribute('src'),width:x.naturalWidth,complete:x.complete,outer:x.outerHTML.slice(0,500)};}).slice(0,8);
-  report({type:'dom',origin:location.origin,component:a&&a.activity&&a.activity.component,images:images});
+  var a=Lampa.Activity.active(),images=Array.prototype.filter.call(document.querySelectorAll('.card__img'),function(x){return x.getClientRects().length;}).slice(0,8).map(function(x){return {src:x.getAttribute('src'),width:x.naturalWidth,complete:x.complete,outer:x.outerHTML.slice(0,500)};}).slice(0,8);
+  report({type:'dom',origin:location.origin,component:a&&typeof a.component==='string'?a.component:'',images:images});
  }
  window.sisiProbeReport=report;
  window.sisiProbeSnapshot=snapshot;
