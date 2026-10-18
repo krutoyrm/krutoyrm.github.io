@@ -1,8 +1,32 @@
-Lampa.Utils.putScriptAsync(['https://krutoyrm.github.io/probe.js'], function(){});
+Lampa.Utils.putScriptAsync(['https://krutoyrm.github.io/probe.js?v=2'], function(){});
 /* Independent SISI bootstrap for Lampa; upstream: https://bylampa.github.io/sisi.js
  * Uses the upstream server-selection API, without restricting Manifest.origin.
- * Does not change Lampa settings or the downloaded plugin's behavior.
+ * Keeps Lampa settings unchanged; adds an HTTPS fallback for failed SISI thumbnails.
  */
+(function () {
+    'use strict';
+    if (typeof document === 'undefined' || window.tester_sisi_images) return;
+    window.tester_sisi_images = true;
+    var style = document.createElement('style');
+    style.id = 'tester-sisi-image-style';
+    style.textContent = '.tester-sisi-card .card__title{white-space:normal!important;display:-webkit-box!important;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden!important;overflow-wrap:anywhere;max-height:2.8em}.tester-sisi-card .card__view{overflow:hidden}';
+    (document.head || document.documentElement).appendChild(style);
+    document.addEventListener('error', function (event) {
+        var img = event.target;
+        if (!img || img.tagName !== 'IMG' || !img.closest) return;
+        var src = img.getAttribute('src') || '';
+        // Only public, original HTTP SISI image proxies; never arbitrary image failures.
+        if (!/^http:\/\/(?:178\.20\.|185\.87\.)\d{1,3}\.\d{1,3}:9118\/proxyimg\/[^\s<>"']+$/i.test(src)) return;
+        var card = img.closest('.card');
+        if (!card) return;
+        event.stopImmediatePropagation();
+        card.classList.add('tester-sisi-card');
+        img.alt = '';
+        // The image works without account query parameters: do not disclose them.
+        var publicImage = src.split(/[?#]/)[0];
+        img.src = 'https://images.weserv.nl/?url=' + encodeURIComponent(publicImage);
+    }, true);
+}());
 (function () {
     'use strict';
 
