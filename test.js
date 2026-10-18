@@ -1,4 +1,4 @@
-/* test 0.5.1 — independent direct-host online provider for Lampa. No Lampac proxy. */
+/* test 0.5.2 — independent direct-host online provider for Lampa. No Lampac proxy. */
 (function () {
     'use strict';
     function decode(s) { return String(s || '').replace(/&amp;|&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
@@ -60,6 +60,21 @@
         }
         throw new Error('Неполные данные плеера');
     }
+    // Collaps CDN rejects ExoPlayer / Android WebView / Dalvik UAs with HTTP 410.
+    // Bind a stable desktop Mozilla UA for both extraction and native/external playback.
+    function collapsHeaders() {
+        return { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' };
+    }
+    function collapsVoices(audio) {
+        if (!audio || !Array.isArray(audio.names) || !audio.names.length) return [];
+        var names = audio.names, order = Array.isArray(audio.order) ? audio.order : null, out = [];
+        for (var i = 0; i < (order || names).length; i++) {
+            var idx = order ? order[i] : i;
+            if (typeof idx !== 'number' || idx < 0 || idx >= names.length) continue;
+            out.push({title: names[idx], index: idx});
+        }
+        return out;
+    }
     function collaps(html) {
         var m = /\bseasons\s*:\s*(\[)/.exec(html), out = [];
         var suffix = /\bvar\s+lok\s*=\s*\d+\s*,\s*[\w$]+\s*=\s*"([a-f0-9]+)"/.exec(html);
@@ -67,7 +82,8 @@
             if (e.blocked || !/^https:\/\/[^\s"<>]+\.m3u8(?:\?|$)/i.test(e.hls || '')) return;
             out.push({title: (season ? season + ' сезон · ' + e.episode + ' серия' : e.title || 'Фильм'), season: season || 0, episode: e.episode,
                 url: e.hls + (suffix ? (e.hls.indexOf('?') >= 0 ? '&' : '?') + suffix[1] : ''),
-                audio: e.audio && e.audio.names || [], subtitles: (e.cc || []).filter(function (s) { return /^https:\/\//.test(s.url || ''); }).map(function (s) { return {label: s.name, url: s.url}; })});
+                audio: e.audio && e.audio.names || [], voices: collapsVoices(e.audio),
+                subtitles: (e.cc || []).filter(function (s) { return /^https:\/\//.test(s.url || ''); }).map(function (s) { return {label: s.name, url: s.url}; })});
         }
         if (m) jsonAt(html, m.index + m[0].length - 1).forEach(function (s) { if (!s.blocked) (s.episodes || []).forEach(function (e) { add(e, s.season); }); });
         else {
@@ -201,6 +217,7 @@
         return out;
     }
     var api = {catalogue: catalogue, allohaPage: allohaPage, allohaStreams: allohaStreams, search: search, providers: providers, jsonAt: jsonAt, collaps: collaps,
+        collapsHeaders: collapsHeaders, collapsVoices: collapsVoices,
         kodikMenu: kodikMenu, kodikParams: kodikParams, kodikStreams: kodikStreams};
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
     if (window.krutoyrm_test_ready) return;
@@ -309,10 +326,12 @@
     function back() { generation++; network.clear(); Lampa.Controller.toggle('full'); }
     function fail(message) { if (screen && !screen.dead()) { screen.message(message); Lampa.Controller.toggle('content'); } Lampa.Noty.show('test: ' + message); }
     function get(url, done, token, post, headers) {
-        var helper = /^http:\/\/127\.0\.0\.1:18765\/resolve\?/.test(url), timeout = helper ? 60000 : 20000;
+        var timeout = 20000;
         network.timeout(timeout);
+        // Android serializes object POST data as JSON, even with a form Content-Type.
+        if (post && typeof post === 'object') post = Object.keys(post).map(function (key) { return encodeURIComponent(key) + '=' + encodeURIComponent(post[key]); }).join('&');
         network.native(url, function (html) { if (token !== generation) return; if (screen && !screen.dead()) screen.activity.loader(false); try { done(html); } catch (e) { fail(e.message); } },
-            function () { if (token === generation) fail(helper ? 'Alloha: недоступен помощник на ПК. Запустите start_tv.cmd.' : 'Источник недоступен. Повторите выбор или выберите другой хостинг.'); }, post || false,
+            function () { if (token === generation) fail('Источник недоступен. Повторите выбор или выберите другой хостинг.'); }, post || false,
             {dataType: 'text', timeout: timeout, headers: headers || {Referer: 'https://doramyklyb.ru/'}});
     }
     function openKodik(host, match, returnToHosts) {
@@ -348,23 +367,8 @@
             chooseVoice();
         }, token);
     }
-    function openAlloha(host, match, returnToHosts) {
-        var requestToken=++generation;
-        get(host.url,function(html){
-            var initial=allohaPage(html);
-            function chooseEpisode(){select('Alloha · серии',initial.episodes,function(entry){
-                var freshToken=++generation;
-                var helper='http://127.0.0.1:18765/resolve?source='+encodeURIComponent(match.url)+'&episode='+encodeURIComponent(entry.id);
-                get(helper,function(answer){
-                    var voices=allohaStreams(answer);
-                    select('Alloha · озвучка',voices,function(voice){
-                        var media={url:voice.quality['1080p'] || voice.quality['720p'] || voice.url,quality:voice.quality,subtitles:voice.subtitles,title:match.title+' · '+entry.title+' · '+voice.title};
-                        Lampa.Player.play(media);Lampa.Player.playlist([media]);
-                    },chooseEpisode);
-                },freshToken);
-            },returnToHosts);}
-            chooseEpisode();
-        },requestToken);
+    function openAlloha() {
+        fail('Alloha: автономное воспроизведение пока недоступно. Выберите Kodik или Collaps.');
     }
     function select(title, items, fn, onBack) {
         if (screen && !screen.dead()) return screen.present(title, items, fn);
@@ -379,7 +383,7 @@
                 if (host.id === 'alloha') return openAlloha(host, match, show);
                 if (host.id === 'kodik') return openKodik(host, match, show);
                 if (host.id !== 'collaps') return fail(host.title + ': прямое извлечение пока не поддерживается. Выберите Collaps или Kodik.');
-                var requestToken = ++generation;
+                var requestToken = ++generation, cHeaders = Object.assign({'Referer': host.url}, collapsHeaders());
                 get(host.url, function (page) {
                     var episodes = collaps(page);
                     function chooseEpisode() { select('Collaps · серии', episodes, function (entry) {
@@ -389,13 +393,16 @@
                             var playlist = collaps(fresh), index = -1;
                             playlist.some(function (e, i) { if (e.season === entry.season && String(e.episode) === String(entry.episode)) { index = i; return true; } return false; });
                             if (index < 0) return fail('Серия больше недоступна');
-                            var videos = playlist.map(function (e) { return {title: match.title + ' · ' + e.title, url: e.url, subtitles: e.subtitles}; });
+                            // Bind the stable Mozilla UA per-item so the native/external Lampa player
+                            // forwards it on every upstream request (master, audio manifests, segments).
+                            // Without this, Android WebView / ExoPlayer UAs get HTTP 410 from Collaps CDN.
+                            var videos = playlist.map(function (e) { return {title: match.title + ' · ' + e.title, url: e.url, subtitles: e.subtitles, headers: Object.assign({}, cHeaders)}; });
                             Lampa.Player.play(videos[index]);
                             Lampa.Player.playlist(videos);
-                        }, freshToken);
+                        }, freshToken, false, cHeaders);
                     }, show); }
                     chooseEpisode();
-                }, requestToken);
+                }, requestToken, false, cHeaders);
             }); }
             show();
         }, token);
@@ -434,54 +441,6 @@
             '.test-online__empty{padding:2em 1em;opacity:.65;line-height:1.5}' +
             '</style>').appendTo('head');
     }
-    // Same native catalogue component as Softbox, with a separate request lifetime.
-    function Catalogue(object) {
-        var comp = new Lampa.InteractionCategory(object), request = new Lampa.Reguest(), alive = true;
-        var destroy = comp.destroy.bind(comp), seen = Object.create(null);
-        comp.destroy = function () { alive = false; request.clear(); destroy(); };
-        function loadPage(page, resolve, reject) {
-            if (!Number.isInteger(+page) || +page < 1 || +page > 10000) return reject();
-            request.native('https://doramyklyb.ru/' + (+page > 1 ? 'page/' + (+page) + '/' : ''), function (html) {
-                if (!alive) return;
-                try {
-                    var data = catalogue(html, +page);
-                    var results = data.items.filter(function (item) { if (seen[item.url]) return false; seen[item.url] = true; return true; });
-                    resolve({results:results, page:+page, total_pages:data.pages});
-                } catch (error) { reject(error); }
-            }, function () { if (alive) reject(); }, false, {dataType:'text', timeout:20000});
-        }
-        comp.create = function () {
-            comp.activity.loader(true);
-            loadPage(1, function (data) { comp.activity.loader(false); if (data.results.length) comp.build(data); else comp.empty(); },
-                function () { comp.activity.loader(false); comp.empty(); Lampa.Noty.show('Doramy Club: каталог недоступен'); });
-            return comp.render();
-        };
-        comp.nextPageReuest = function (query, resolve, reject) {
-            loadPage(query.page, resolve, function () {
-                if (object.page === query.page) object.page = query.page - 1;
-                Lampa.Noty.show('Doramy Club: повторите загрузку страницы'); reject();
-            });
-        };
-        // Site slugs are not TMDB IDs: always enter our own episode screen.
-        comp.cardRender = function (query, item, card) { card.onEnter = function () { open(item); }; };
-        return comp;
-    }
-    function openCatalogue() {
-        if (Lampa.InteractionCategory && Lampa.Component) {
-            Lampa.Activity.push({title:'Doramy Club', component:'krutoyrm_doramy_catalogue', source:'doramy_club', page:1});
-        } else Lampa.Noty.show('Doramy Club: обновите Lampa для каталога');
-    }
-    if (Lampa.InteractionCategory && Lampa.Component) {
-        Lampa.Component.add('krutoyrm_doramy_catalogue', Catalogue);
-        function addCatalogueMenu() {
-            var menu = $('.menu .menu__list').eq(0);
-            if (!menu.length || $('[data-doramy-club-menu]').length) return;
-            var item = $('<li class="menu__item selector" data-doramy-club-menu="1"><div class="menu__ico"><svg><use xlink:href="#sprite-play"></use></svg></div><div class="menu__text">Doramy Club</div></li>');
-            item.on('hover:enter', openCatalogue); menu.append(item);
-        }
-        if (window.appready) addCatalogueMenu();
-        Lampa.Listener.follow('app', function (event) { if (event.type === 'ready') addCatalogueMenu(); });
-    }
     Lampa.Listener.follow('full', function (event) {
         if (event.type !== 'complite' || !event.data || !event.data.movie) return;
         var body = event.body || (event.object && event.object.activity && event.object.activity.render());
@@ -492,5 +451,5 @@
         button.on('hover:enter', function () { open(event.data.movie); });
         buttons.append(button);
     });
-    window.krutoyrmTest = {open: open, version: '0.5.1'};
+    window.krutoyrmTest = {open: open, version: '0.5.2'};
 }());
