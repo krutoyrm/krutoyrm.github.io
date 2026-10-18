@@ -1,4 +1,4 @@
-/* test 0.2.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
+/* test 0.3.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
 (function () {
     'use strict';
     function decode(s) { return String(s || '').replace(/&amp;|&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
@@ -185,12 +185,112 @@
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
     if (window.krutoyrm_test_ready) return;
     window.krutoyrm_test_ready = true;
-    var network = new Lampa.Reguest(), generation = 0;
+    var network = new Lampa.Reguest(), generation = 0, screen;
+    // Use Lampa's own Explorer: the same poster, information panel and spacing as Online.
+    function Online(object) {
+        var self = this, explorer = new Lampa.Explorer(object), scroll = new Lampa.Scroll({mask:true, over:true});
+        var toolbar = $('<div class="test-online__filters"></div>'), list = $('<div class="test-online__list"></div>');
+        var hosts = [], hostAction, host, voices = [], voiceAction, voice, episodes = [], episodeAction, activeEpisode;
+        var seasons = [], season, last, started = false, dead = false;
+        this.dead = function () { return dead; };
+        explorer.render().addClass('test-online');
+        explorer.appendHead(toolbar); scroll.append(list); explorer.appendFiles(scroll.render());
+        scroll.minus(explorer.render().find('.explorer__files-head'));
+        scroll.onWheel = function (step) { scroll.wheel(step); };
+        function focus(element) { last = element; if ($(element).closest('.test-online__list').length) scroll.update(element, true); }
+        function button(title, action) {
+            var item = $('<div class="simple-button simple-button--filter selector"></div>').text(title);
+            item.on('hover:enter', action).on('hover:focus', function () { focus(this); }); toolbar.append(item);
+        }
+        function popup(title, items, current, action) {
+            Lampa.Select.show({title:title, items:items.map(function (item) { return Object.assign({}, item, {selected:item === current || item.selected === true}); }),
+                onBack:function () { Lampa.Controller.toggle('content'); },
+                onSelect:function (item) { Lampa.Select.close(); action(item); }});
+        }
+        function chooseHost(item) {
+            generation++; network.clear();
+            host = item; voices = []; voice = null; episodes = []; seasons = []; season = null; last = null; activeEpisode = null;
+            self.message('Загрузка серий…'); self.activity.loader(true); filters(); hostAction(item);
+        }
+        function filters() {
+            toolbar.empty();
+            button('Назад', function () { Lampa.Activity.backward(); });
+            if (hosts.length) button(host ? host.title : 'Источник', function () { popup('Источник', hosts, host, chooseHost); });
+            if (voices.length) button('Озвучка: ' + (voice ? voice.title : 'выбрать'), function () {
+                popup('Озвучка', voices, voice, function (item) {
+                    voice = item; filters();
+                    // Alloha's signed media must be refreshed, never replayed from a cached filter item.
+                    if (item.quality && activeEpisode) { self.activity.loader(true); episodeAction(activeEpisode); }
+                    else voiceAction(item);
+                });
+            });
+            if (seasons.length) button('Сезон ' + season, function () {
+                popup('Сезон', seasons.map(function (s) { return {title:'Сезон ' + s, season:s, selected:s === season}; }), null,
+                    function (item) { season = item.season; last = null; filters(); rows(); });
+            });
+        }
+        function rows() {
+            list.empty();
+            episodes.filter(function (item) { return !item.season || item.season === season; }).forEach(function (item) {
+                var row = $('<div class="test-online__episode selector"><div class="test-online__episode-title"></div><div class="test-online__episode-info"></div></div>');
+                row.find('.test-online__episode-title').text(item.title);
+                row.find('.test-online__episode-info').text((host ? host.title : 'Выберите совпадение') + (voice ? ' · ' + voice.title : '') + (item.season ? ' · Сезон ' + item.season : ''));
+                row.on('hover:focus', function () { focus(this); });
+                row.on('hover:enter', function () { activeEpisode = item; self.activity.loader(true); episodeAction(item); }); list.append(row);
+            });
+            if (!list.children().length) self.message('Серии не найдены. Выберите другой источник.');
+            self.activity.loader(false); Lampa.Controller.toggle('content');
+        }
+        this.message = function (message) {
+            list.empty().append($('<div class="test-online__empty selector"></div>').text(message));
+            self.activity.loader(false); last = null;
+        };
+        this.present = function (title, items, action) {
+            if (dead) return;
+            self.activity.loader(false);
+            if (items.length && items[0].id && items[0].url) {
+                hosts = items; hostAction = action;
+                chooseHost(items.filter(function (item) { return item.id === 'collaps'; })[0] || items[0]); return;
+            }
+            if (/^(?:Kodik|Alloha) · озвучка$/i.test(title)) {
+                voices = items; voiceAction = action;
+                var selected = voices.filter(function (item) { return voice && item.title === voice.title; })[0] || voices[0];
+                voice = selected; filters(); if (episodes.length) rows(); if (selected) action(selected); return;
+            }
+            episodes = items; episodeAction = action; seasons = [];
+            items.forEach(function (item) { if (item.season && seasons.indexOf(item.season) < 0) seasons.push(item.season); });
+            seasons.sort(function (a,b) { return a-b; });
+            if (seasons.indexOf(season) < 0) season = seasons[0];
+            last = null; filters(); rows();
+        };
+        this.create = function () { return this.render(); };
+        this.start = function () {
+            screen = self;
+            Lampa.Controller.add('content', {
+                toggle:function () { var content = explorer.render().find('.explorer__files-head').parent(); Lampa.Controller.collectionSet(content); Lampa.Controller.collectionFocus(last || false, content); },
+                up:function () { if (window.Navigator.canmove('up')) window.Navigator.move('up'); else Lampa.Controller.toggle('head'); },
+                down:function () { window.Navigator.move('down'); },
+                left:function () { if (window.Navigator.canmove('left')) window.Navigator.move('left'); else explorer.toggle(); },
+                right:function () { window.Navigator.move('right'); },
+                back:function () { Lampa.Activity.backward(); }
+            });
+            if (!started) { started = true; filters(); self.message('Поиск источников…'); load(object.movie); }
+            Lampa.Controller.toggle('content');
+        };
+        this.render = function () { return explorer.render(); };
+        this.pause = function () {};
+        this.stop = function () {};
+        this.destroy = function () {
+            dead = true; generation++; network.clear(); if (screen === self) screen = null;
+            scroll.destroy(); explorer.destroy();
+        };
+    }
+
     function back() { generation++; network.clear(); Lampa.Controller.toggle('full'); }
-    function fail(message) { Lampa.Noty.show('test: ' + message); }
+    function fail(message) { if (screen && !screen.dead()) { screen.message(message); Lampa.Controller.toggle('content'); } Lampa.Noty.show('test: ' + message); }
     function get(url, done, token, post, headers) {
         network.timeout(20000);
-        network.native(url, function (html) { if (token !== generation) return; try { done(html); } catch (e) { fail(e.message); } },
+        network.native(url, function (html) { if (token !== generation) return; if (screen && !screen.dead()) screen.activity.loader(false); try { done(html); } catch (e) { fail(e.message); } },
             function () { if (token === generation) fail('Источник недоступен. Повторите выбор или выберите другой хостинг.'); }, post || false,
             {dataType: 'text', timeout: 20000, headers: headers || {Referer: 'https://doramyklyb.ru/'}});
     }
@@ -249,7 +349,10 @@
             chooseEpisode();
         },requestToken);
     }
-    function select(title, items, fn, onBack) { Lampa.Select.show({title: title, items: items, onSelect: fn, onBack: onBack || back}); }
+    function select(title, items, fn, onBack) {
+        if (screen && !screen.dead()) return screen.present(title, items, fn);
+        Lampa.Select.show({title: title, items: items, onSelect: fn, onBack: onBack || back});
+    }
     function openProviders(card, match) {
         var token = ++generation; network.clear();
         get(match.url, function (html) {
@@ -280,7 +383,7 @@
             show();
         }, token);
     }
-    function open(card) {
+    function load(card) {
         var title = card.title || card.name || card.original_title || card.original_name;
         if (!title) return fail('У карточки нет названия');
         var token = ++generation; network.clear();
@@ -291,6 +394,25 @@
             select('test · выберите совпадение', matches, function (match) { openProviders(card, match); });
         }, token);
     }
+    function open(card) {
+        if (!Lampa.Component || !Lampa.Explorer || !Lampa.Scroll) return load(card);
+        var movie = Object.assign({}, card, {title:card.title || card.name || card.original_title || card.original_name,
+            original_title:card.original_title || card.original_name || ''});
+        Lampa.Activity.push({component:'krutoyrm_test_online', title:'test · Онлайн', movie:movie, card:movie});
+    }
+    if (Lampa.Component && Lampa.Explorer && Lampa.Scroll) {
+        Lampa.Component.add('krutoyrm_test_online', Online);
+        $('<style id="krutoyrm-test-style">' +
+            '.test-online__filters{display:flex;flex-wrap:wrap;gap:.65em;padding-bottom:1em}' +
+            '.test-online__filters .simple-button{margin:0}' +
+            '.test-online__list{padding:.3em .4em 2em 0}' +
+            '.test-online__episode{padding:1.1em 1.35em;margin-bottom:.65em;border:.2em solid transparent;border-radius:.3em;background:rgba(255,255,255,.06)}' +
+            '.test-online__episode.focus{border-color:#fff;background:rgba(255,255,255,.14)}' +
+            '.test-online__episode-title{font-size:1.2em;font-weight:600}' +
+            '.test-online__episode-info{opacity:.6;font-size:.85em;margin-top:.5em}' +
+            '.test-online__empty{padding:2em 1em;opacity:.65;line-height:1.5}' +
+            '</style>').appendTo('head');
+    }
     Lampa.Listener.follow('full', function (event) {
         if (event.type !== 'complite' || !event.data || !event.data.movie || !event.body) return;
         var body = event.body, buttons = body.find('.full-start-new__buttons, .full-start__buttons').first();
@@ -299,5 +421,5 @@
         button.on('hover:enter', function () { open(event.data.movie); });
         buttons.append(button);
     });
-    window.krutoyrmTest = {open: open, version: '0.2.0'};
+    window.krutoyrmTest = {open: open, version: '0.3.0'};
 }());
