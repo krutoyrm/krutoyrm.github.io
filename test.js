@@ -1,0 +1,227 @@
+/* test 0.1.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
+(function () {
+    'use strict';
+    function decode(s) { return String(s || '').replace(/&amp;|&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
+    function text(s) { return decode(s.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim(); }
+    function search(html) {
+        var out = [], seen = {}, re = /<a\b([^>]*\bclass=["'][^"']*\barticles__item\b[^"']*["'][^>]*)>([\s\S]*?)<\/a>/gi, m;
+        while ((m = re.exec(html))) {
+            var href = /\bhref=["']([^"']+)["']/.exec(m[1]), name = /class=["']articles__title["'][^>]*>([\s\S]*?)<\/div>/i.exec(m[2]);
+            if (!href || !name || !/^https:\/\/doramyklyb\.ru\/[a-z0-9-]+\/$/i.test(href[1]) || seen[href[1]]) continue;
+            seen[href[1]] = true;
+            out.push({title: text(name[1]), url: href[1]});
+        }
+        return out;
+    }
+    function providers(html) {
+        var out = [], seen = {}, re = /\bdata-iframe\s*=\s*(["'])(.*?)\1/gi, m;
+        while ((m = re.exec(html))) {
+            var url = decode(m[2]);
+            if (url.indexOf('//') === 0) url = 'https:' + url;
+            if (!/^https:\/\/[^\s<>"']+$/i.test(url) || seen[url] || /youtube\.com\//i.test(url)) continue;
+            var host = url.split('/')[2].toLowerCase(), id = 'unknown', title = 'Неизвестный хостинг';
+            if (/(^|\.)stravers\.live$/.test(host)) { id = 'alloha'; title = 'Alloha'; }
+            else if (/(^|\.)(nextembed\.ws|embess\.ws|collaps\.[a-z]+)$/.test(host)) { id = 'collaps'; title = 'Collaps'; }
+            else if (/(^|\.)obrut\.show$/.test(host)) { id = 'turbo'; title = 'Turbo'; }
+            else if (/(^|\.)kodik(?:player)?\.com$/.test(host)) { id = 'kodik'; title = 'Kodik'; }
+            seen[url] = true;
+            out.push({id: id, title: title, url: url});
+        }
+        return out;
+    }
+    // Read JSON only. Never eval downloaded player scripts.
+    function jsonAt(s, start) {
+        var depth = 0, quote = false, escaped = false;
+        for (var i = start; i < s.length; i++) {
+            var c = s.charAt(i);
+            if (quote) { if (escaped) escaped = false; else if (c === '\\') escaped = true; else if (c === '"') quote = false; }
+            else if (c === '"') quote = true;
+            else if (c === '[' || c === '{') depth++;
+            else if ((c === ']' || c === '}') && !--depth) return JSON.parse(s.slice(start, i + 1));
+        }
+        throw new Error('Неполные данные плеера');
+    }
+    function collaps(html) {
+        var m = /\bseasons\s*:\s*(\[)/.exec(html), out = [];
+        var suffix = /\bvar\s+lok\s*=\s*\d+\s*,\s*[\w$]+\s*=\s*"([a-f0-9]+)"/.exec(html);
+        function add(e, season) {
+            if (e.blocked || !/^https:\/\/[^\s"<>]+\.m3u8(?:\?|$)/i.test(e.hls || '')) return;
+            out.push({title: (season ? season + ' сезон · ' + e.episode + ' серия' : e.title || 'Фильм'), season: season || 0, episode: e.episode,
+                url: e.hls + (suffix ? (e.hls.indexOf('?') >= 0 ? '&' : '?') + suffix[1] : ''),
+                audio: e.audio && e.audio.names || [], subtitles: (e.cc || []).filter(function (s) { return /^https:\/\//.test(s.url || ''); }).map(function (s) { return {label: s.name, url: s.url}; })});
+        }
+        if (m) jsonAt(html, m.index + m[0].length - 1).forEach(function (s) { if (!s.blocked) (s.episodes || []).forEach(function (e) { add(e, s.season); }); });
+        else {
+            m = /\bsource\s*:\s*(\{)/.exec(html);
+            if (m) add(jsonAt(html, m.index + m[0].length - 1), 0);
+        }
+        if (!out.length) throw new Error('Collaps не выдал доступные HLS-потоки');
+        return out;
+    }
+    function attrs(s) {
+        var a = {}, re = /([\w-]+)\s*=\s*(["'])(.*?)\2/g, m;
+        while ((m = re.exec(s))) a[m[1]] = decode(m[3]);
+        return a;
+    }
+    function kodikMenu(html) {
+        var episodes = [], voices = [], seen = {}, m, re = /<div\b[^>]*class=["']season-(\d+)["'][^>]*>([\s\S]*?)<\/div>/gi;
+        function options(block, season) {
+            var r = /<option\b([^>]*)>([\s\S]*?)<\/option>/gi, o;
+            while ((o = r.exec(block))) {
+                var a = attrs(o[1]), id = a['data-id'], hash = a['data-hash'], key = season + ':' + a.value;
+                if (!/^\d+$/.test(id || '') || !/^[a-f0-9]+$/.test(hash || '') || seen[key]) continue;
+                seen[key] = true;
+                episodes.push({title: season + ' сезон · ' + text(o[2]), season: +season, episode: a.value,
+                    url: 'https://kodikplayer.com/seria/' + id + '/' + hash + '/720p'});
+            }
+        }
+        while ((m = re.exec(html))) options(m[2], m[1]);
+        re = /<option\b([^>]*\bdata-media-id\s*=[^>]*)>([\s\S]*?)<\/option>/gi;
+        while ((m = re.exec(html))) {
+            var a = attrs(m[1]), id = a['data-media-id'], hash = a['data-media-hash'], type = a['data-media-type'];
+            if (/^\d+$/.test(id || '') && /^[a-f0-9]+$/.test(hash || '') && /^(serial|video)$/.test(type || ''))
+                voices.push({title: a['data-title'] || text(m[2]), url: 'https://kodikplayer.com/' + type + '/' + id + '/' + hash + '/720p'});
+        }
+        episodes.sort(function (a, b) { return a.season - b.season || (+a.episode) - (+b.episode); });
+        return {episodes: episodes, voices: voices};
+    }
+    function kodikParams(html) {
+        var m = /\burlParams\s*=\s*'(\{[^\n]*?\})'/.exec(html);
+        if (!m) throw new Error('Kodik: подписи страницы недоступны');
+        var params = JSON.parse(m[1]), out = {}, re = /\bvInfo\.(type|hash|id)\s*=\s*['"]([^'"]+)['"]/g;
+        while ((m = re.exec(html))) out[m[1]] = m[2];
+        ['d', 'd_sign', 'pd', 'pd_sign', 'ref', 'ref_sign'].forEach(function (key) {
+            if (typeof params[key] !== 'string' || !params[key]) throw new Error('Kodik: отсутствуют подписи');
+            out[key] = key === 'ref' ? decodeURIComponent(params[key]) : params[key];
+        });
+        if (!out.type || !out.hash || !out.id) throw new Error('Kodik: нет данных видео');
+        out.bad_user = 'true'; out.cdn_is_working = 'true';
+        return out;
+    }
+    function kodikStreams(data) {
+        if (typeof data === 'string') data = JSON.parse(data);
+        var quality = {}, best = 0, url = '';
+        function media(value) {
+            if (value.indexOf('//') === 0) value = 'https:' + value;
+            return /^https:\/\/[^\s<>"'\\]+\.m3u8(?:\?[^\s<>"'\\]*)?$/.test(value) ? value : '';
+        }
+        Object.keys(data.links || {}).forEach(function (key) {
+            if (!/^\d+$/.test(key)) return;
+            var variants = data.links[key];
+            (Array.isArray(variants) ? variants : []).some(function (v) {
+                var src = v.src, decoded = typeof src === 'string' ? media(src) : '';
+                if (!src) return false;
+                for (var shift = 0; !decoded && shift < 26; shift++) {
+                    var base = src.replace(/[a-z]/gi, function (c) {
+                        var first = c <= 'Z' ? 65 : 97;
+                        return String.fromCharCode((c.charCodeAt(0) - first + shift) % 26 + first);
+                    });
+                    try { decoded = media(atob(base + '==='.slice((base.length + 3) % 4))); } catch (ignore) { /* Try the next rotation. */ }
+                }
+                if (!decoded) return false;
+                quality[key + 'p'] = decoded;
+                if (+key > best) { best = +key; url = decoded; }
+                return true;
+            });
+        });
+        if (!url) throw new Error('Kodik не выдал доступные HLS-потоки');
+        return {url: url, quality: quality};
+    }
+    var api = {search: search, providers: providers, jsonAt: jsonAt, collaps: collaps,
+        kodikMenu: kodikMenu, kodikParams: kodikParams, kodikStreams: kodikStreams};
+    if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
+    if (window.krutoyrm_test_ready) return;
+    window.krutoyrm_test_ready = true;
+    var network = new Lampa.Reguest(), generation = 0;
+    function back() { generation++; network.clear(); Lampa.Controller.toggle('full'); }
+    function fail(message) { Lampa.Noty.show('test: ' + message); }
+    function get(url, done, token, post, headers) {
+        network.timeout(20000);
+        network.native(url, function (html) { if (token !== generation) return; try { done(html); } catch (e) { fail(e.message); } },
+            function () { if (token === generation) fail('Источник недоступен. Повторите выбор или выберите другой хостинг.'); }, post || false,
+            {dataType: 'text', timeout: 20000, headers: headers || {Referer: 'https://doramyklyb.ru/'}});
+    }
+    function openKodik(host, match, returnToHosts) {
+        var token = ++generation;
+        get(host.url, function (html) {
+            var menu = kodikMenu(html);
+            function chooseVoice() {
+                if (!menu.voices.length) return chooseEpisodes(host, html);
+                select('Kodik · озвучка', menu.voices, function (voice) {
+                    var voiceToken = ++generation;
+                    get(voice.url, function (page) { chooseEpisodes(voice, page); }, voiceToken);
+                }, returnToHosts);
+            }
+            function chooseEpisodes(voice, page) {
+                var episodes = kodikMenu(page).episodes;
+                if (!episodes.length) episodes = [{title: 'Фильм', url: voice.url}];
+                select('Kodik · ' + voice.title, episodes, function (episode) {
+                    var playToken = ++generation;
+                    get(episode.url, function (fresh) {
+                        var params = kodikParams(fresh);
+                        get('https://kodikplayer.com/ftor', function (answer) {
+                            var media = kodikStreams(answer);
+                            media.title = match.title + ' · ' + voice.title + ' · ' + episode.title;
+                            media.timeline = true;
+                            Lampa.Player.play(media);
+                            // Resolve each episode on demand; iframe links must never enter Player.playlist.
+                            Lampa.Player.playlist([media]);
+                        }, playToken, params, {'Content-Type': 'application/x-www-form-urlencoded', Referer: episode.url,
+                            Origin: 'https://kodikplayer.com', 'X-Requested-With': 'XMLHttpRequest'});
+                    }, playToken);
+                }, chooseVoice);
+            }
+            chooseVoice();
+        }, token);
+    }
+    function select(title, items, fn, onBack) { Lampa.Select.show({title: title, items: items, onSelect: fn, onBack: onBack || back}); }
+    function openProviders(card, match) {
+        var token = ++generation; network.clear();
+        get(match.url, function (html) {
+            var hosts = providers(html);
+            if (!hosts.length) return fail('На странице нет доступных плееров');
+            function show() { select('test · ' + match.title, hosts, function (host) {
+                if (host.id === 'kodik') return openKodik(host, match, show);
+                if (host.id !== 'collaps') return fail(host.title + ': прямое извлечение пока не поддерживается. Выберите Collaps или Kodik.');
+                var requestToken = ++generation;
+                get(host.url, function (page) {
+                    var episodes = collaps(page);
+                    function chooseEpisode() { select('Collaps · серии', episodes, function (entry) {
+                        // Refresh signed URLs for every launch; do not store expiring links in Storage.
+                        var freshToken = ++generation;
+                        get(host.url, function (fresh) {
+                            var playlist = collaps(fresh), index = -1;
+                            playlist.some(function (e, i) { if (e.season === entry.season && String(e.episode) === String(entry.episode)) { index = i; return true; } return false; });
+                            if (index < 0) return fail('Серия больше недоступна');
+                            var videos = playlist.map(function (e) { return {title: match.title + ' · ' + e.title, url: e.url, subtitles: e.subtitles, timeline: true}; });
+                            Lampa.Player.play(videos[index]);
+                            Lampa.Player.playlist(videos);
+                        }, freshToken);
+                    }, show); }
+                    chooseEpisode();
+                }, requestToken);
+            }); }
+            show();
+        }, token);
+    }
+    function open(card) {
+        var title = card.title || card.name || card.original_title || card.original_name;
+        if (!title) return fail('У карточки нет названия');
+        var token = ++generation; network.clear();
+        get('https://doramyklyb.ru/?s=' + encodeURIComponent(title), function (html) {
+            var matches = search(html);
+            if (!matches.length) return fail('На Doramy club ничего не найдено');
+            // Never silently select the wrong remake/season from a fuzzy site search.
+            select('test · выберите совпадение', matches, function (match) { openProviders(card, match); });
+        }, token);
+    }
+    Lampa.Listener.follow('full', function (event) {
+        if (event.type !== 'complite' || !event.data || !event.data.movie || !event.body) return;
+        var body = event.body, buttons = body.find('.full-start-new__buttons, .full-start__buttons').first();
+        if (!buttons.length || body.find('[data-krutoyrm-test]').length) return;
+        var button = $('<div class="full-start__button selector view--online" data-krutoyrm-test="1"><svg><use xlink:href="#sprite-play"></use></svg><span>test</span></div>');
+        button.on('hover:enter', function () { open(event.data.movie); });
+        buttons.append(button);
+    });
+    window.krutoyrmTest = {open: open, version: '0.1.0'};
+}());
