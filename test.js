@@ -1,4 +1,4 @@
-/* test 0.1.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
+/* test 0.2.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
 (function () {
     'use strict';
     function decode(s) { return String(s || '').replace(/&amp;|&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
@@ -127,7 +127,60 @@
         if (!url) throw new Error('Kodik не выдал доступные HLS-потоки');
         return {url: url, quality: quality};
     }
-    var api = {search: search, providers: providers, jsonAt: jsonAt, collaps: collaps,
+    function allohaPage(html) {
+        var meta = /<meta\b[^>]*name=["']viewporti["'][^>]*content=["']([^"']+)["']/i.exec(html);
+        var token = /\bconst\s+userParam\s*=\s*\{[\s\S]*?\btoken:\s*'([^']+)'/.exec(html);
+        var list = /\bconst\s+fileList\s*=\s*JSON\.parse\('((?:\\.|[^'\\])*)'\)/.exec(html);
+        if (!meta || !token || !list) throw new Error('Alloha: изменился формат страницы');
+        // Decode a quoted data literal, never execute the remote script.
+        var raw = list[1].replace(/\\(x[0-9a-f]{2}|u[0-9a-f]{4}|[\s\S])/gi, function (_, c) {
+            if (/^[xu]/.test(c) && c.length > 1) return String.fromCharCode(parseInt(c.slice(1), 16));
+            return ({n:'\n',r:'\r',t:'\t',b:'\b',f:'\f'})[c] || c;
+        });
+        var files = JSON.parse(raw), episodes = [], source = decode(meta[1]);
+        if (source.length > 2048 || source.length < 8) throw new Error('Alloha: неверная подпись страницы');
+        function regroup(s, group, descending) {
+            var order = [], out = [];
+            for (var i=0;i<s.length;i++) order.push(i);
+            order.sort(function(a,b){return (descending ? -1 : 1)*(group(a)-group(b)) || a-b;});
+            order.forEach(function(index,k){out[index]=s.charAt(k);}); return out.join('');
+        }
+        var bits = Math.ceil(Math.log(source.length)/Math.LN2);
+        source = regroup(source, function(i){return i ? Math.floor(Math.log(i)/Math.LN2)+1 : 0;}, true);
+        source = regroup(source, function(i){if(!i)return bits;var n=0;while(i%2===0){n++;i/=2;}return n;});
+        var prime=source.length+1;
+        function isPrime(n){for(var k=2;k*k<=n;k++)if(n%k===0)return false;return n>=2;}
+        while(!isPrime(prime))prime++;
+        var out=[], position=0, count=0;
+        while(count<source.length){position=(position+2)%prime;if(position<source.length)out[position]=source.charAt(count++);}
+        Object.keys(files.all || {}).sort(function(a,b){return a-b;}).forEach(function(season){
+            Object.keys(files.all[season]).sort(function(a,b){return a-b;}).forEach(function(ep){
+                var voices=files.all[season][ep], entry=voices[Object.keys(voices)[0]];
+                if(entry && /^\d+$/.test(String(entry.id)))episodes.push({id:entry.id,season:+season,episode:+ep,title:season+' сезон · '+ep+' серия'});
+            });
+        });
+        if(!episodes.length && files.active && /^\d+$/.test(String(files.active.id)))episodes.push({id:files.active.id,title:'Фильм'});
+        if(!episodes.length)throw new Error('Alloha: нет доступных серий');
+        return {token:token[1],episodes:episodes,borth:Array(65).join('a')+'|'+out.join('')};
+    }
+    function allohaStreams(answer) {
+        var data = typeof answer === 'string' ? JSON.parse(answer) : answer, out = [];
+        var subtitles = (data.tracks || []).filter(function (s) { return s.kind === 'subtitles' && /^https:\/\/[^\s"<>]+$/i.test(s.src || ''); })
+            .map(function (s) { return {label: s.label || s.language || 'Субтитры', url: s.src}; });
+        (data.hlsSource || []).forEach(function (voice) {
+            var quality = {}, best = 0, url = '';
+            Object.keys(voice.quality || {}).forEach(function (key) {
+                var src = voice.quality[key];
+                if (!/^\d+$/.test(key) || !/^https:\/\/[^\s"<>]+$/i.test(src || '')) return;
+                quality[key + 'p'] = src;
+                if (+key > best) { best = +key; url = src; }
+            });
+            if (url) out.push({title: voice.label || 'Озвучка', audioId: voice.audioId, url: url, quality: quality, subtitles: subtitles});
+        });
+        if (!out.length) throw new Error('Alloha не выдал доступные HLS-потоки');
+        return out;
+    }
+    var api = {allohaPage: allohaPage, allohaStreams: allohaStreams, search: search, providers: providers, jsonAt: jsonAt, collaps: collaps,
         kodikMenu: kodikMenu, kodikParams: kodikParams, kodikStreams: kodikStreams};
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
     if (window.krutoyrm_test_ready) return;
@@ -174,6 +227,28 @@
             chooseVoice();
         }, token);
     }
+    function openAlloha(host, match, returnToHosts) {
+        var requestToken=++generation;
+        get(host.url,function(html){
+            var initial=allohaPage(html), origin=host.url.split('/').slice(0,3).join('/');
+            function chooseEpisode(){select('Alloha · серии',initial.episodes,function(entry){
+                var freshToken=++generation;
+                get(host.url,function(fresh){
+                    var page=allohaPage(fresh), episode=page.episodes.filter(function(e){return e.season===entry.season && e.episode===entry.episode;})[0];
+                    if(!episode)return fail('Alloha: серия больше недоступна');
+                    get(origin+'/bnsi/movies/'+episode.id,function(answer){
+                        var voices=allohaStreams(answer);
+                        select('Alloha · озвучка',voices,function(voice){
+                            var media={url:voice.url,quality:voice.quality,subtitles:voice.subtitles,title:match.title+' · '+entry.title+' · '+voice.title,timeline:true};
+                            Lampa.Player.play(media);Lampa.Player.playlist([media]);
+                        },chooseEpisode);
+                    },freshToken,{token:page.token,av1:'false',autoplay:'0'},
+                    {'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',Referer:host.url,Origin:origin,'X-Requested-With':'XMLHttpRequest',Borth:page.borth});
+                },freshToken);
+            },returnToHosts);}
+            chooseEpisode();
+        },requestToken);
+    }
     function select(title, items, fn, onBack) { Lampa.Select.show({title: title, items: items, onSelect: fn, onBack: onBack || back}); }
     function openProviders(card, match) {
         var token = ++generation; network.clear();
@@ -181,6 +256,7 @@
             var hosts = providers(html);
             if (!hosts.length) return fail('На странице нет доступных плееров');
             function show() { select('test · ' + match.title, hosts, function (host) {
+                if (host.id === 'alloha') return openAlloha(host, match, show);
                 if (host.id === 'kodik') return openKodik(host, match, show);
                 if (host.id !== 'collaps') return fail(host.title + ': прямое извлечение пока не поддерживается. Выберите Collaps или Kodik.');
                 var requestToken = ++generation;
@@ -223,5 +299,5 @@
         button.on('hover:enter', function () { open(event.data.movie); });
         buttons.append(button);
     });
-    window.krutoyrmTest = {open: open, version: '0.1.0'};
+    window.krutoyrmTest = {open: open, version: '0.2.0'};
 }());
