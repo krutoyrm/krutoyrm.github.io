@@ -15,7 +15,7 @@
     }
     function catalogue(html, page) {
         page = +page;
-        if (page < 1 || page > 10000 || page % 1) throw new Error('Неверная страница каталога');
+        if (!isFinite(page) || page < 1 || page > 10000 || page % 1) throw new Error('Неверная страница каталога');
         var items = search(html), pages = page, re = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi, m;
         while ((m = re.exec(html))) {
             var a = attrs(m[1]), href = a.href || '', n = /^https:\/\/doramyklyb\.ru\/page\/(\d+)\/$/.exec(href);
