@@ -1,4 +1,4 @@
-/* test 0.3.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
+/* test 0.4.0 — independent direct-host online provider for Lampa. No Lampac proxy. */
 (function () {
     'use strict';
     function decode(s) { return String(s || '').replace(/&amp;|&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
@@ -171,7 +171,8 @@
             var quality = {}, best = 0, url = '';
             Object.keys(voice.quality || {}).forEach(function (key) {
                 var src = voice.quality[key];
-                if (!/^\d+$/.test(key) || !/^https:\/\/[^\s"<>]+$/i.test(src || '')) return;
+                var local = /^http:\/\/127\.0\.0\.1:18765\/stream\/[a-zA-Z0-9_-]+(?:\.m3u8)?$/.test(src || '');
+                if (!/^\d+$/.test(key) || (!local && !/^https:\/\/[^\s"<>]+$/i.test(src || ''))) return;
                 quality[key + 'p'] = src;
                 if (+key > best) { best = +key; url = src; }
             });
@@ -289,10 +290,11 @@
     function back() { generation++; network.clear(); Lampa.Controller.toggle('full'); }
     function fail(message) { if (screen && !screen.dead()) { screen.message(message); Lampa.Controller.toggle('content'); } Lampa.Noty.show('test: ' + message); }
     function get(url, done, token, post, headers) {
-        network.timeout(20000);
+        var helper = /^http:\/\/127\.0\.0\.1:18765\/resolve\?/.test(url), timeout = helper ? 60000 : 20000;
+        network.timeout(timeout);
         network.native(url, function (html) { if (token !== generation) return; if (screen && !screen.dead()) screen.activity.loader(false); try { done(html); } catch (e) { fail(e.message); } },
-            function () { if (token === generation) fail('Источник недоступен. Повторите выбор или выберите другой хостинг.'); }, post || false,
-            {dataType: 'text', timeout: 20000, headers: headers || {Referer: 'https://doramyklyb.ru/'}});
+            function () { if (token === generation) fail(helper ? 'Alloha: недоступен помощник на ПК. Запустите start_tv.cmd.' : 'Источник недоступен. Повторите выбор или выберите другой хостинг.'); }, post || false,
+            {dataType: 'text', timeout: timeout, headers: headers || {Referer: 'https://doramyklyb.ru/'}});
     }
     function openKodik(host, match, returnToHosts) {
         var token = ++generation;
@@ -330,20 +332,16 @@
     function openAlloha(host, match, returnToHosts) {
         var requestToken=++generation;
         get(host.url,function(html){
-            var initial=allohaPage(html), origin=host.url.split('/').slice(0,3).join('/');
+            var initial=allohaPage(html);
             function chooseEpisode(){select('Alloha · серии',initial.episodes,function(entry){
                 var freshToken=++generation;
-                get(host.url,function(fresh){
-                    var page=allohaPage(fresh), episode=page.episodes.filter(function(e){return e.season===entry.season && e.episode===entry.episode;})[0];
-                    if(!episode)return fail('Alloha: серия больше недоступна');
-                    get(origin+'/bnsi/movies/'+episode.id,function(answer){
-                        var voices=allohaStreams(answer);
-                        select('Alloha · озвучка',voices,function(voice){
-                            var media={url:voice.url,quality:voice.quality,subtitles:voice.subtitles,title:match.title+' · '+entry.title+' · '+voice.title,timeline:true};
-                            Lampa.Player.play(media);Lampa.Player.playlist([media]);
-                        },chooseEpisode);
-                    },freshToken,{token:page.token,av1:'false',autoplay:'0'},
-                    {'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',Referer:host.url,Origin:origin,'X-Requested-With':'XMLHttpRequest',Borth:page.borth});
+                var helper='http://127.0.0.1:18765/resolve?source='+encodeURIComponent(match.url)+'&episode='+encodeURIComponent(entry.id);
+                get(helper,function(answer){
+                    var voices=allohaStreams(answer);
+                    select('Alloha · озвучка',voices,function(voice){
+                        var media={url:voice.quality['1080p'] || voice.quality['720p'] || voice.url,quality:voice.quality,subtitles:voice.subtitles,title:match.title+' · '+entry.title+' · '+voice.title,timeline:true};
+                        Lampa.Player.play(media);Lampa.Player.playlist([media]);
+                    },chooseEpisode);
                 },freshToken);
             },returnToHosts);}
             chooseEpisode();
@@ -421,5 +419,5 @@
         button.on('hover:enter', function () { open(event.data.movie); });
         buttons.append(button);
     });
-    window.krutoyrmTest = {open: open, version: '0.3.0'};
+    window.krutoyrmTest = {open: open, version: '0.4.0'};
 }());
