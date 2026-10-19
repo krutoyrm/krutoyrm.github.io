@@ -7,7 +7,7 @@
     function start() {
         try {
             Lampa.Platform.tv();
-            Lampa.Utils.putScriptAsync(['http://109.172.86.65/sisi.js'], function () {});
+            Lampa.Utils.putScriptAsync(['http://150.241.116.154/sisi.js'], function () {});
         } catch (error) {
             window[flag] = false;
             Lampa.Noty.show('Не удалось загрузить SISI с 109.172.86.65');
